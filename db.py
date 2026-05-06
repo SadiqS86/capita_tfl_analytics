@@ -209,6 +209,152 @@ def load_messages(conversation_id: str, limit: int = 50) -> list[dict[str, Any]]
         return list(cur.fetchall())
 
 
+_branding_tables_ready = False
+_branding_lock = threading.Lock()
+
+
+def _ensure_branding_tables() -> None:
+    """Idempotently create the branding tables. First call lazily creates them."""
+    global _branding_tables_ready
+    if _branding_tables_ready:
+        return
+    with _branding_lock:
+        if _branding_tables_ready:
+            return
+        with conn() as c, c.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key         TEXT PRIMARY KEY,
+                    value       TEXT NOT NULL,
+                    updated_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_assets (
+                    name        TEXT PRIMARY KEY,
+                    mime_type   TEXT NOT NULL,
+                    content     BYTEA NOT NULL,
+                    updated_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+                )
+                """
+            )
+            c.commit()
+        _branding_tables_ready = True
+
+
+def get_app_settings() -> dict[str, str]:
+    """Return all rows in app_settings as {key: value}. Empty if table missing/empty."""
+    if not is_enabled():
+        return {}
+    try:
+        _ensure_branding_tables()
+    except Exception:
+        return {}
+    with conn() as c, c.cursor() as cur:
+        cur.execute("SELECT key, value FROM app_settings")
+        return {r["key"]: r["value"] for r in cur.fetchall()}
+
+
+def upsert_app_setting(key: str, value: str) -> None:
+    _ensure_branding_tables()
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO app_settings (key, value)
+            VALUES (%s, %s)
+            ON CONFLICT (key) DO UPDATE
+            SET value = EXCLUDED.value, updated_at = now()
+            """,
+            (key, value),
+        )
+        c.commit()
+
+
+def upsert_app_settings(items: dict[str, str]) -> None:
+    if not items:
+        return
+    _ensure_branding_tables()
+    with conn() as c, c.cursor() as cur:
+        for k, v in items.items():
+            cur.execute(
+                """
+                INSERT INTO app_settings (key, value)
+                VALUES (%s, %s)
+                ON CONFLICT (key) DO UPDATE
+                SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (k, v),
+            )
+        c.commit()
+
+
+def delete_app_setting(key: str) -> None:
+    if not is_enabled():
+        return
+    _ensure_branding_tables()
+    with conn() as c, c.cursor() as cur:
+        cur.execute("DELETE FROM app_settings WHERE key = %s", (key,))
+        c.commit()
+
+
+def upsert_asset(name: str, mime_type: str, content: bytes) -> None:
+    """Store an asset (logo, etc.) as bytes; served back via /api/assets/{name}."""
+    _ensure_branding_tables()
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO app_assets (name, mime_type, content)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (name) DO UPDATE
+            SET mime_type = EXCLUDED.mime_type,
+                content = EXCLUDED.content,
+                updated_at = now()
+            """,
+            (name, mime_type, content),
+        )
+        c.commit()
+
+
+def get_asset(name: str) -> tuple[str, bytes] | None:
+    if not is_enabled():
+        return None
+    try:
+        _ensure_branding_tables()
+    except Exception:
+        return None
+    with conn() as c, c.cursor() as cur:
+        cur.execute("SELECT mime_type, content FROM app_assets WHERE name = %s", (name,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        content = row["content"]
+        if isinstance(content, memoryview):
+            content = bytes(content)
+        return str(row["mime_type"]), content
+
+
+def list_assets() -> list[dict[str, Any]]:
+    if not is_enabled():
+        return []
+    try:
+        _ensure_branding_tables()
+    except Exception:
+        return []
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            SELECT name, mime_type, octet_length(content) AS size_bytes,
+                   to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+            FROM app_assets
+            ORDER BY updated_at DESC
+            """
+        )
+        return list(cur.fetchall())
+
+
 def recent_history(conversation_id: str, max_turns: int = 12) -> list[dict[str, str]]:
     """Return the last ``max_turns`` messages as [{role, content}, ...] in chronological order."""
     with conn() as c, c.cursor() as cur:

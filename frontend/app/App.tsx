@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Send, Activity, Lightbulb, X, Moon, Sun, RotateCcw, type LucideIcon } from "lucide-react";
+import { Send, Activity, Lightbulb, X, Moon, Sun, RotateCcw, Settings, Upload, type LucideIcon } from "lucide-react";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import * as LucideIcons from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   fetchBootstrap,
+  fetchBrandingSettings,
   fetchContextualSuggestions,
   fetchCurrentConversation,
   fetchDashboardCharts,
@@ -13,8 +14,11 @@ import {
   fetchPriorityActions,
   fetchSuggestions,
   generateNba,
+  saveBrandingSettings,
   startNewConversation,
   streamChat,
+  uploadBrandingLogo,
+  type BrandingResolved,
   type ChatStreamEvent,
   type KPIPayload,
   type NextBestAction,
@@ -444,6 +448,315 @@ function PriorityActionsWidget({
   );
 }
 
+type BrandingModalProps = {
+  darkMode: boolean;
+  onClose: () => void;
+  onSaved: (resolved: BrandingResolved) => void;
+};
+
+function BrandingModal({ darkMode, onClose, onSaved }: BrandingModalProps) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [lakebaseEnabled, setLakebaseEnabled] = useState(true);
+  const [resolved, setResolved] = useState<BrandingResolved>({
+    app_name: "",
+    app_logo_url: "",
+    app_logo_url_dark: "",
+  });
+  const [appName, setAppName] = useState("");
+  const [logoUrl, setLogoUrl] = useState("");
+  const [logoUrlDark, setLogoUrlDark] = useState("");
+
+  useEffect(() => {
+    fetchBrandingSettings()
+      .then((b) => {
+        setLakebaseEnabled(b.lakebase_enabled);
+        setResolved(b.resolved);
+        setAppName(b.saved.app_name ?? b.resolved.app_name ?? "");
+        setLogoUrl(b.saved.app_logo_url ?? b.resolved.app_logo_url ?? "");
+        setLogoUrlDark(b.saved.app_logo_url_dark ?? "");
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const onSave = async () => {
+    setSaving(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const r = await saveBrandingSettings({
+        app_name: appName,
+        app_logo_url: logoUrl,
+        app_logo_url_dark: logoUrlDark,
+      });
+      setResolved(r.resolved);
+      setInfo("Saved.");
+      onSaved(r.resolved);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onResetToDefaults = async () => {
+    setSaving(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const r = await saveBrandingSettings({
+        app_name: "",
+        app_logo_url: "",
+        app_logo_url_dark: "",
+      });
+      setResolved(r.resolved);
+      setAppName(r.resolved.app_name);
+      setLogoUrl(r.resolved.app_logo_url);
+      setLogoUrlDark("");
+      setInfo("Reset to environment / file defaults.");
+      onSaved(r.resolved);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to reset");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onUploadFile = async (file: File, variant: "light" | "dark") => {
+    setSaving(true);
+    setError(null);
+    setInfo(null);
+    try {
+      const r = await uploadBrandingLogo(file, variant);
+      setResolved(r.resolved);
+      if (variant === "light") setLogoUrl(r.resolved.app_logo_url);
+      else setLogoUrlDark(r.resolved.app_logo_url_dark || "");
+      setInfo(`Uploaded ${variant} logo (${Math.round(r.size_bytes / 1024)} KB).`);
+      onSaved(r.resolved);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const inputBase = `w-full px-3 py-2 border rounded-lg text-sm focus:outline-none focus:ring-2 ${
+    darkMode ? "bg-slate-700 border-slate-600 text-white placeholder-slate-400" : "bg-slate-50 border-slate-200 text-slate-900"
+  }`;
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className={`rounded-xl shadow-2xl max-w-xl w-full max-h-[90vh] overflow-auto ${darkMode ? "bg-slate-800" : "bg-white"}`}
+      >
+        <div
+          className={`sticky top-0 z-10 border-b p-5 flex items-center justify-between ${darkMode ? "border-slate-700 bg-slate-800" : "border-slate-200 bg-white"}`}
+        >
+          <div>
+            <h3 className={`text-lg font-semibold ${darkMode ? "text-white" : "text-slate-900"}`}>
+              App Branding
+            </h3>
+            <p className={`text-xs mt-0.5 ${darkMode ? "text-slate-400" : "text-slate-500"}`}>
+              Changes apply instantly — no redeploy needed.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className={`p-1 rounded transition-colors ${darkMode ? "text-slate-400 hover:bg-slate-700" : "text-slate-400 hover:bg-slate-100"}`}
+            aria-label="Close"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-5">
+          {!lakebaseEnabled && (
+            <div className="text-xs px-3 py-2 rounded border border-amber-300 bg-amber-50 text-amber-800">
+              Lakebase isn't configured for this app — you can still preview locally,
+              but saves will fail. Set <code>LAKEBASE_HOST</code> + database env vars.
+            </div>
+          )}
+          {loading && (
+            <div className={`text-sm ${darkMode ? "text-slate-300" : "text-slate-600"}`}>Loading…</div>
+          )}
+
+          {!loading && (
+            <>
+              <div>
+                <label className={`block text-xs font-medium mb-1 ${darkMode ? "text-slate-300" : "text-slate-700"}`}>
+                  App name
+                </label>
+                <input
+                  type="text"
+                  value={appName}
+                  onChange={(e) => setAppName(e.target.value)}
+                  placeholder="Capita TfL Analytics"
+                  className={inputBase}
+                  style={{ "--tw-ring-color": CAPITA_COLORS.navyBlue } as React.CSSProperties}
+                />
+                <p className={`text-[11px] mt-1 ${darkMode ? "text-slate-500" : "text-slate-500"}`}>
+                  Shown in the browser tab and (when no logo is set) in the header.
+                </p>
+              </div>
+
+              <div>
+                <label className={`block text-xs font-medium mb-1 ${darkMode ? "text-slate-300" : "text-slate-700"}`}>
+                  Logo URL (light mode)
+                </label>
+                <input
+                  type="text"
+                  value={logoUrl}
+                  onChange={(e) => setLogoUrl(e.target.value)}
+                  placeholder="/api/assets/logo  or  https://cdn.example.com/logo.svg"
+                  className={inputBase}
+                  style={{ "--tw-ring-color": CAPITA_COLORS.navyBlue } as React.CSSProperties}
+                />
+                <div className="flex items-center gap-3 mt-2">
+                  <label
+                    className={`inline-flex items-center gap-2 text-xs px-3 py-2 rounded-lg cursor-pointer border transition-colors ${
+                      darkMode ? "border-slate-600 text-slate-200 hover:bg-slate-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Upload file…</span>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void onUploadFile(f, "light");
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  {logoUrl && !logoUrl.endsWith("undefined") && (
+                    <img
+                      src={logoUrl}
+                      alt="Light preview"
+                      className={`h-8 max-w-[160px] object-contain border rounded ${darkMode ? "border-slate-700 bg-white" : "border-slate-200 bg-white"} px-2 py-1`}
+                    />
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className={`block text-xs font-medium mb-1 ${darkMode ? "text-slate-300" : "text-slate-700"}`}>
+                  Logo URL (dark mode — optional)
+                </label>
+                <input
+                  type="text"
+                  value={logoUrlDark}
+                  onChange={(e) => setLogoUrlDark(e.target.value)}
+                  placeholder="Leave blank to reuse the light logo"
+                  className={inputBase}
+                  style={{ "--tw-ring-color": CAPITA_COLORS.navyBlue } as React.CSSProperties}
+                />
+                <div className="flex items-center gap-3 mt-2">
+                  <label
+                    className={`inline-flex items-center gap-2 text-xs px-3 py-2 rounded-lg cursor-pointer border transition-colors ${
+                      darkMode ? "border-slate-600 text-slate-200 hover:bg-slate-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Upload file…</span>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/svg+xml,image/webp,image/gif"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void onUploadFile(f, "dark");
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  {logoUrlDark && (
+                    <img
+                      src={logoUrlDark}
+                      alt="Dark preview"
+                      className="h-8 max-w-[160px] object-contain border rounded border-slate-700 bg-slate-900 px-2 py-1"
+                    />
+                  )}
+                </div>
+              </div>
+
+              {(error || info) && (
+                <div
+                  className={`text-xs px-3 py-2 rounded ${
+                    error
+                      ? "border border-red-300 bg-red-50 text-red-700"
+                      : "border border-emerald-300 bg-emerald-50 text-emerald-700"
+                  }`}
+                >
+                  {error || info}
+                </div>
+              )}
+
+              <div className="text-[11px] space-y-1 px-1 pb-1">
+                <div className={darkMode ? "text-slate-500" : "text-slate-500"}>
+                  Currently resolved:
+                </div>
+                <div className={darkMode ? "text-slate-300" : "text-slate-600"}>
+                  • app_name: <code>{resolved.app_name || "(empty)"}</code>
+                </div>
+                <div className={darkMode ? "text-slate-300" : "text-slate-600"}>
+                  • app_logo_url: <code>{resolved.app_logo_url || "(empty)"}</code>
+                </div>
+                <div className={darkMode ? "text-slate-300" : "text-slate-600"}>
+                  • app_logo_url_dark: <code>{resolved.app_logo_url_dark || "(empty)"}</code>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div
+          className={`sticky bottom-0 border-t p-4 flex items-center justify-between gap-3 ${
+            darkMode ? "border-slate-700 bg-slate-800" : "border-slate-200 bg-white"
+          }`}
+        >
+          <button
+            type="button"
+            onClick={() => void onResetToDefaults()}
+            disabled={saving || loading || !lakebaseEnabled}
+            className={`text-xs underline disabled:opacity-50 ${darkMode ? "text-slate-400" : "text-slate-500"}`}
+          >
+            Reset to defaults
+          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className={`px-4 py-2 text-sm rounded-lg ${darkMode ? "text-slate-300 hover:bg-slate-700" : "text-slate-600 hover:bg-slate-100"}`}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void onSave()}
+              disabled={saving || loading || !lakebaseEnabled}
+              className="px-4 py-2 text-sm text-white rounded-lg disabled:opacity-50"
+              style={{ backgroundColor: CAPITA_COLORS.navyBlue }}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<"chat" | "dashboard">("chat");
   const [darkMode, setDarkMode] = useState(false);
@@ -455,6 +768,7 @@ export default function App() {
   const [appLogoUrl, setAppLogoUrl] = useState("");
   const [appLogoUrlDark, setAppLogoUrlDark] = useState("");
   const [logoBroken, setLogoBroken] = useState(false);
+  const [brandingOpen, setBrandingOpen] = useState(false);
 
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   type ChatMessage = {
@@ -730,6 +1044,19 @@ export default function App() {
 
   return (
     <div className={`size-full flex flex-col min-h-0 ${darkMode ? "bg-slate-900" : "bg-slate-50"}`}>
+      {brandingOpen && (
+        <BrandingModal
+          darkMode={darkMode}
+          onClose={() => setBrandingOpen(false)}
+          onSaved={(r) => {
+            setAppName(r.app_name || "");
+            setAppLogoUrl(r.app_logo_url || "");
+            setAppLogoUrlDark(r.app_logo_url_dark || r.app_logo_url || "");
+            setLogoBroken(false);
+            if (r.app_name) document.title = r.app_name;
+          }}
+        />
+      )}
       <div
         className={`border-b px-6 shrink-0 ${darkMode ? "bg-slate-800 border-slate-700" : "bg-white border-slate-200"}`}
       >
@@ -805,6 +1132,16 @@ export default function App() {
                 <span className="text-xs font-medium">New thread</span>
               </button>
             )}
+            <button
+              type="button"
+              onClick={() => setBrandingOpen(true)}
+              title="App branding (logo + name)"
+              className={`p-2 rounded-lg transition-colors ${
+                darkMode ? "bg-slate-700 text-slate-200 hover:bg-slate-600" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              <Settings className="w-5 h-5" />
+            </button>
             <button
               type="button"
               onClick={() => setDarkMode(!darkMode)}

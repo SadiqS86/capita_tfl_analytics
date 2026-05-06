@@ -9,8 +9,9 @@ import time
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
-from fastapi import APIRouter, BackgroundTasks
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel
 
 import branding
 import db
@@ -173,6 +174,151 @@ def bootstrap() -> BootstrapResponse:
         app_name=b.get("app_name", ""),
         app_logo_url=b.get("app_logo_url", ""),
         app_logo_url_dark=b.get("app_logo_url_dark", ""),
+    )
+
+
+class BrandingUpdate(BaseModel):
+    app_name: str | None = None
+    app_logo_url: str | None = None
+    app_logo_url_dark: str | None = None
+
+
+_BRANDING_KEYS = ("app_name", "app_logo_url", "app_logo_url_dark")
+_LOGO_MIME_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "image/svg+xml",
+    "image/webp",
+    "image/gif",
+}
+_MAX_LOGO_BYTES = 2 * 1024 * 1024  # 2 MB
+
+
+@router.get("/branding")
+def get_branding_settings() -> dict[str, Any]:
+    """Return current resolved branding plus the raw Lakebase overrides
+    (so the settings UI can show what's actually saved vs. what's a default)."""
+    resolved = branding.get_branding()
+    saved: dict[str, str] = {}
+    if db.is_enabled():
+        try:
+            settings = db.get_app_settings()
+            for k in _BRANDING_KEYS:
+                if k in settings:
+                    saved[k] = settings[k]
+        except Exception as exc:
+            print(f"[branding] read app_settings failed: {exc}")
+    assets: list[dict[str, Any]] = []
+    if db.is_enabled():
+        try:
+            assets = db.list_assets() or []
+        except Exception:
+            assets = []
+    return {
+        "lakebase_enabled": db.is_enabled(),
+        "resolved": resolved,
+        "saved": saved,
+        "assets": assets,
+    }
+
+
+@router.post("/branding")
+def update_branding(body: BrandingUpdate) -> dict[str, Any]:
+    """Persist branding overrides in Lakebase. Pass an empty string to clear a value."""
+    if not db.is_enabled():
+        raise HTTPException(503, "Lakebase is not configured — cannot save runtime branding.")
+    updates: dict[str, str] = {}
+    deletes: list[str] = []
+    payload = body.model_dump()
+    for k in _BRANDING_KEYS:
+        v = payload.get(k)
+        if v is None:
+            continue
+        v = v.strip()
+        if v == "":
+            deletes.append(k)
+        else:
+            updates[k] = v
+    try:
+        if updates:
+            db.upsert_app_settings(updates)
+        for k in deletes:
+            db.delete_app_setting(k)
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to save branding: {exc}") from exc
+
+    branding.invalidate_cache()
+    return {"ok": True, "saved": updates, "cleared": deletes, "resolved": branding.get_branding()}
+
+
+@router.post("/branding/logo")
+async def upload_branding_logo(
+    file: UploadFile = File(...),
+    variant: str = Form("light"),
+) -> dict[str, Any]:
+    """Upload a logo image to Lakebase. ``variant`` = 'light' | 'dark'.
+
+    The asset is stored as bytes; the corresponding `app_logo_url[/_dark]`
+    setting is updated to the public ``/api/assets/<name>`` URL.
+    """
+    if not db.is_enabled():
+        raise HTTPException(503, "Lakebase is not configured — cannot store uploaded logo.")
+    variant = (variant or "light").strip().lower()
+    if variant not in ("light", "dark"):
+        raise HTTPException(400, "variant must be 'light' or 'dark'")
+    mime = (file.content_type or "").lower().strip()
+    if mime not in _LOGO_MIME_TYPES:
+        raise HTTPException(415, f"Unsupported file type: {mime!r}")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "Empty file")
+    if len(content) > _MAX_LOGO_BYTES:
+        raise HTTPException(413, f"File too large (max {_MAX_LOGO_BYTES // 1024} KB)")
+
+    asset_name = "logo" if variant == "light" else "logo-dark"
+    try:
+        db.upsert_asset(asset_name, mime, content)
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to store asset: {exc}") from exc
+
+    cache_buster = int(time.time())
+    url = f"/api/assets/{asset_name}?v={cache_buster}"
+    setting_key = "app_logo_url" if variant == "light" else "app_logo_url_dark"
+    try:
+        db.upsert_app_setting(setting_key, url)
+    except Exception as exc:
+        raise HTTPException(500, f"Stored asset but failed to save URL: {exc}") from exc
+    branding.invalidate_cache()
+
+    return {
+        "ok": True,
+        "variant": variant,
+        "asset_name": asset_name,
+        "url": url,
+        "size_bytes": len(content),
+        "mime_type": mime,
+        "resolved": branding.get_branding(),
+    }
+
+
+@router.get("/assets/{name}")
+def get_asset(name: str) -> Response:
+    """Stream a stored asset (e.g. uploaded logo) from Lakebase."""
+    if not db.is_enabled():
+        raise HTTPException(404, "Asset store not configured")
+    try:
+        record = db.get_asset(name)
+    except Exception:
+        record = None
+    if not record:
+        raise HTTPException(404, "Asset not found")
+    mime, content = record
+    return Response(
+        content=content,
+        media_type=mime,
+        headers={"Cache-Control": "public, max-age=300"},
     )
 
 

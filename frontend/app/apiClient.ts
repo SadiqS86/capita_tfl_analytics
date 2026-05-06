@@ -87,6 +87,57 @@ export async function fetchDashboardCharts() {
   }>(await fetch("/api/dashboard/charts"));
 }
 
+export type BrandingResolved = {
+  app_name: string;
+  app_logo_url: string;
+  app_logo_url_dark: string;
+};
+
+export type BrandingAsset = {
+  name: string;
+  mime_type: string;
+  size_bytes: number;
+  updated_at: string;
+};
+
+export async function fetchBrandingSettings() {
+  return parseJson<{
+    lakebase_enabled: boolean;
+    resolved: BrandingResolved;
+    saved: Partial<BrandingResolved>;
+    assets: BrandingAsset[];
+  }>(await fetch("/api/branding"));
+}
+
+export async function saveBrandingSettings(payload: Partial<BrandingResolved>) {
+  const res = await fetch("/api/branding", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return parseJson<{
+    ok: boolean;
+    saved: Record<string, string>;
+    cleared: string[];
+    resolved: BrandingResolved;
+  }>(res);
+}
+
+export async function uploadBrandingLogo(file: File, variant: "light" | "dark" = "light") {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("variant", variant);
+  const res = await fetch("/api/branding/logo", { method: "POST", body: fd });
+  return parseJson<{
+    ok: boolean;
+    variant: string;
+    url: string;
+    size_bytes: number;
+    mime_type: string;
+    resolved: BrandingResolved;
+  }>(res);
+}
+
 export type NextBestAction = {
   action: string;
   urgency: "Immediate" | "This Week" | "Monitor";
