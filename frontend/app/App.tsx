@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Send,
   Activity,
@@ -1025,6 +1025,7 @@ export default function App() {
   const [statusLabel, setStatusLabel] = useState<string | null>(null);
   const [statusElapsedMs, setStatusElapsedMs] = useState<number>(0);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const [suggestionsRefreshing, setSuggestionsRefreshing] = useState(false);
   const [lastClickedCategory, setLastClickedCategory] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -1390,6 +1391,18 @@ export default function App() {
     [conversationId],
   );
 
+  // Auto-scroll the chat to the latest message whenever it changes (new user
+  // turn, streaming answer, or "thinking…" pill). rAF gives the DOM a tick to
+  // render before we measure scrollHeight.
+  useEffect(() => {
+    if (activeTab !== "chat") return;
+    const el = chatScrollRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    });
+  }, [activeTab, messages, sending, statusLabel]);
+
   const starterChips = suggestions.slice(0, 5);
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
   const followupChips = lastAssistant?.followups?.length ? lastAssistant.followups : [];
@@ -1630,7 +1643,7 @@ export default function App() {
 
           {/* Right panel — chat */}
           <div className="flex-1 flex flex-col min-h-0 relative">
-          <div className="flex-1 overflow-auto p-6 space-y-4 min-h-0">
+          <div ref={chatScrollRef} className="flex-1 overflow-auto p-6 space-y-4 min-h-0">
             {messages.length === 0 && (
               <div className="flex justify-start">
                 <div
