@@ -124,8 +124,20 @@
     @apply border-border outline-ring/50;
   }
 
+  /* Anchor full-viewport height so child wrappers using `h-full` /
+     `size-full` correctly fill the screen instead of growing with
+     content. Without this, the entire page scrolls and the
+     "suggestions" sidebar moves out of view as the chat grows. */
+  html,
+  body,
+  #root {
+    height: 100%;
+    min-height: 100%;
+  }
+
   body {
     @apply bg-background text-foreground;
+    overflow: hidden;
   }
 
   /**
