@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Send, Activity, Lightbulb, X, Moon, Sun, type LucideIcon } from "lucide-react";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import * as LucideIcons from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   fetchBootstrap,
   fetchDashboardCharts,
@@ -30,6 +32,58 @@ function iconByName(name: string): LucideIcon {
   return I || Activity;
 }
 
+/**
+ * Try to parse the first GitHub-flavored markdown table from text.
+ * Returns header + rows when at least one numeric column exists, else null.
+ */
+type ParsedTable = { headers: string[]; rows: (string | number)[][]; numericCol: number | null };
+
+function parseFirstMarkdownTable(text: string): ParsedTable | null {
+  const lines = text.split("\n");
+  let headerIdx = -1;
+  for (let i = 0; i < lines.length - 1; i++) {
+    const t = lines[i].trim();
+    const sep = lines[i + 1].trim();
+    if (t.startsWith("|") && /^\|?\s*:?-{2,}.*\|/.test(sep)) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx === -1) return null;
+
+  const headers = lines[headerIdx]
+    .split("|")
+    .map((s) => s.trim())
+    .filter((s, i, arr) => !(i === 0 && s === "") && !(i === arr.length - 1 && s === ""));
+
+  const rows: (string | number)[][] = [];
+  for (let j = headerIdx + 2; j < lines.length; j++) {
+    const r = lines[j].trim();
+    if (!r.startsWith("|")) break;
+    const cells = r
+      .split("|")
+      .map((s) => s.trim())
+      .filter((s, i, arr) => !(i === 0 && s === "") && !(i === arr.length - 1 && s === ""));
+    if (cells.length === 0) break;
+    rows.push(
+      cells.map((c) => {
+        const n = Number(c.replace(/[%,£$,\s]/g, ""));
+        return Number.isFinite(n) && c.match(/[0-9]/) ? n : c;
+      }),
+    );
+  }
+  if (rows.length === 0) return null;
+
+  let numericCol: number | null = null;
+  for (let c = 1; c < headers.length; c++) {
+    if (rows.every((r) => typeof r[c] === "number")) {
+      numericCol = c;
+      break;
+    }
+  }
+  return { headers, rows, numericCol };
+}
+
 function formatKpiValue(k: KPIPayload): string {
   if (k.error) return "—";
   if (k.value === null || k.value === undefined) return "—";
@@ -37,6 +91,90 @@ function formatKpiValue(k: KPIPayload): string {
   if (k.unit === "count" || k.unit === "points" || k.unit === "days")
     return String(Math.round(Number(k.value)));
   return String(k.value);
+}
+
+function AssistantBubbleContent({
+  text,
+  typing,
+  darkMode,
+}: {
+  text: string;
+  typing: boolean;
+  darkMode: boolean;
+}) {
+  const parsed = useMemo(() => parseFirstMarkdownTable(text), [text]);
+
+  const proseClasses = [
+    "text-sm leading-relaxed space-y-2",
+    "[&_strong]:font-semibold",
+    "[&_h1]:text-base [&_h1]:font-semibold [&_h1]:mt-2 [&_h1]:mb-1",
+    "[&_h2]:text-base [&_h2]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1",
+    "[&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-2 [&_h3]:mb-1",
+    "[&_p]:my-1",
+    "[&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-1",
+    "[&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-1",
+    "[&_li]:my-0.5",
+    "[&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-xs",
+    darkMode ? "[&_code]:bg-slate-700/60" : "[&_code]:bg-slate-100",
+    "[&_table]:w-full [&_table]:text-xs [&_table]:border-collapse [&_table]:my-2",
+    "[&_th]:text-left [&_th]:font-semibold [&_th]:px-2 [&_th]:py-1",
+    "[&_td]:px-2 [&_td]:py-1 [&_td]:border-t",
+    darkMode ? "[&_th]:bg-slate-700/50 [&_td]:border-slate-600" : "[&_th]:bg-slate-50 [&_td]:border-slate-200",
+    "[&_a]:underline",
+  ].join(" ");
+
+  const showChart = !typing && parsed && parsed.numericCol !== null;
+  const chartData =
+    showChart && parsed
+      ? parsed.rows.map((r) => ({
+          name: String(r[0]),
+          value: Number(r[parsed.numericCol as number]),
+        }))
+      : [];
+
+  return (
+    <div className={proseClasses}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text || ""}</ReactMarkdown>
+      {typing && (
+        <span
+          className="inline-block w-[2px] h-4 align-middle ml-0.5 animate-pulse"
+          style={{ backgroundColor: CAPITA_COLORS.cyan }}
+        />
+      )}
+      {showChart && parsed && (
+        <div
+          className="mt-3 p-3 rounded-lg border"
+          style={{
+            backgroundColor: darkMode ? "rgba(15,23,42,0.6)" : "rgba(255,255,255,0.7)",
+            borderColor: darkMode ? "rgba(0,163,224,0.3)" : "rgba(0,163,224,0.25)",
+          }}
+        >
+          <div className={`text-xs font-medium mb-2 ${darkMode ? "text-slate-300" : "text-slate-600"}`}>
+            {parsed.headers[parsed.numericCol as number]} by {parsed.headers[0]}
+          </div>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke={darkMode ? "#475569" : "#e2e8f0"} />
+              <XAxis dataKey="name" stroke="#94a3b8" style={{ fontSize: 10 }} />
+              <YAxis stroke="#94a3b8" style={{ fontSize: 10 }} />
+              <Tooltip
+                contentStyle={{
+                  backgroundColor: darkMode ? "#1e293b" : "#fff",
+                  border: darkMode ? "1px solid #475569" : "1px solid #e2e8f0",
+                  fontSize: 12,
+                }}
+              />
+              <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                {chartData.map((_, i) => (
+                  <Cell key={i} fill={CHART_FILLS[i % CHART_FILLS.length]} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function App() {
@@ -308,15 +446,15 @@ export default function App() {
                           }
                     }
                   >
-                    <p className={`text-sm ${isUser ? "text-white" : ""}`}>
-                      {msg.content}
-                      {msg.role === "assistant" && msg.typing && (
-                        <span
-                          className="inline-block w-[2px] h-4 align-middle ml-0.5 animate-pulse"
-                          style={{ backgroundColor: CAPITA_COLORS.cyan }}
-                        />
-                      )}
-                    </p>
+                    {isUser ? (
+                      <p className="text-sm text-white whitespace-pre-wrap">{msg.content}</p>
+                    ) : (
+                      <AssistantBubbleContent
+                        text={msg.content}
+                        typing={!!msg.typing}
+                        darkMode={darkMode}
+                      />
+                    )}
                     {msg.role === "assistant" && !msg.typing && (msg.routed || msg.elapsedMs != null) && (
                       <p className={`text-xs mt-2 ${darkMode ? "text-slate-500" : "text-slate-500"}`}>
                         {msg.routed ? `Routed: ${msg.routed}` : ""}
