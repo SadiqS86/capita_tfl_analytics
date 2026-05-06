@@ -1,0 +1,30 @@
+# Databricks Asset Bundle — Capita TfL Adaptive Leader Intelligence (Databricks App)
+# Validate: databricks bundle validate
+# Deploy:   databricks bundle deploy --target default
+
+bundle:
+  name: capita_tfl_analytics
+
+targets:
+  default:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-7405615099217484.4.azuredatabricks.net
+      profile: azure_demo
+    resources:
+      apps:
+        capita_tfl_analytics:
+          name: capita-tfl-analytics
+          description: Capita TfL contract intelligence demo (React + Python).
+          source_code_path: .
+          # Requires frontend/dist (commit it, or build via .github/workflows/build-frontend.yml artifact).
+          # In the workspace App settings, set DATABRICKS_WAREHOUSE_ID for KPIs + leader_profiles.
+          config:
+            env:
+              - name: USE_CASE
+                value: capita_tfl
+              - name: UC_CATALOG
+                value: ss_kibbim_azure_stable
+              - name: UC_SCHEMA
+                value: capita_tfl_demo

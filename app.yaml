@@ -1,0 +1,11 @@
+# Databricks App — FastAPI serves REST API + static SPA from frontend/dist
+# Build frontend before deploy: cd frontend && npm ci && npm run build
+command:
+  - "python"
+  - "-m"
+  - "uvicorn"
+  - "main:app"
+  - "--host"
+  - "0.0.0.0"
+  - "--port"
+  - "8000"

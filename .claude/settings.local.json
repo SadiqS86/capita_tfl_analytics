@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__glean__glean_read_api_call"
+    ]
+  }
+}

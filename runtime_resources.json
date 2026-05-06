@@ -1,0 +1,13 @@
+{
+  "genie_space_id": "01f14956d6bd1af1a2c67a2264280645",
+  "warehouse_id": "c184130100ab98c7",
+  "catalog": "ss_kibbim_azure_stable",
+  "schema": "capita_tfl_demo",
+  "updated_at": "2026-05-06T14:31:44.850669+00:00",
+  "knowledge_assistant_resource_name": "knowledge-assistants/a803f9b2-e051-4bef-a557-9ade1962e20f",
+  "knowledge_assistant_id": "a803f9b2-e051-4bef-a557-9ade1962e20f",
+  "uc_knowledge_volume_path": "/Volumes/ss_kibbim_azure_stable/capita_tfl_demo/tfl_contract_kb",
+  "supervisor_agent_resource_name": "supervisor-agents/2a55402f-ae0b-4859-8219-dcc75842f6c7",
+  "supervisor_agent_id": "2a55402f-ae0b-4859-8219-dcc75842f6c7",
+  "supervisor_endpoint": "mas-2a55402f-endpoint"
+}

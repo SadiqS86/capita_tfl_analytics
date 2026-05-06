@@ -1,0 +1,11 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+!.env.example
+.databricks/
+frontend/node_modules/
+# frontend/dist is tracked so you can deploy the SPA without local npm (build in CI or another network).
+.DS_Store
