@@ -232,7 +232,7 @@ def chat_endpoint(body: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         )
 
     sup = SupervisorEndpointAgent(UC_CONFIG)
-    r = sup.query(msg)
+    r = sup.query(msg, history=[t.model_dump() for t in body.history])
     return ChatResponse(
         answer=str(r.get("answer") or ""),
         routed_to=r.get("routed_to") or "Supervisor",
@@ -270,12 +270,14 @@ async def chat_stream(body: ChatRequest, background_tasks: BackgroundTasks) -> S
 
         loop = asyncio.get_event_loop()
 
+        history = [t.model_dump() for t in body.history]
+
         def _run() -> dict[str, Any]:
             if route == "genie":
                 return GenieAgent(UC_CONFIG).query(msg)
             if route == "rag":
                 return RAGAgent(UC_CONFIG).query(msg)
-            return SupervisorEndpointAgent(UC_CONFIG).query(msg)
+            return SupervisorEndpointAgent(UC_CONFIG).query(msg, history=history)
 
         worker = loop.run_in_executor(None, _run)
 

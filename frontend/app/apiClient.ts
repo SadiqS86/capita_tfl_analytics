@@ -52,11 +52,17 @@ export async function fetchDashboardCharts() {
   }>(await fetch("/api/dashboard/charts"));
 }
 
-export async function sendChatMessage(message: string, mode: "supervisor" | "genie" | "rag" = "supervisor") {
+export type ChatTurn = { role: "user" | "assistant"; content: string };
+
+export async function sendChatMessage(
+  message: string,
+  mode: "supervisor" | "genie" | "rag" = "supervisor",
+  history: ChatTurn[] = [],
+) {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, mode }),
+    body: JSON.stringify({ message, mode, history }),
   });
   return parseJson<{
     answer: string;
@@ -95,12 +101,13 @@ export async function streamChat(
   message: string,
   mode: "supervisor" | "genie" | "rag",
   onEvent: (e: ChatStreamEvent) => void,
-  signal?: AbortSignal,
+  options: { history?: ChatTurn[]; signal?: AbortSignal } = {},
 ): Promise<void> {
+  const { history = [], signal } = options;
   const res = await fetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify({ message, mode }),
+    body: JSON.stringify({ message, mode, history }),
     signal,
   });
   if (!res.ok || !res.body) {

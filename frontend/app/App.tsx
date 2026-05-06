@@ -273,8 +273,20 @@ export default function App() {
       setStatusElapsedMs(0);
       setMessages((m) => [...m, { role: "user", content: text }]);
 
+      const HISTORY_TURNS = 6;
+      const history = messages
+        .filter((m) => (m.fullContent ?? m.content).trim().length > 0)
+        .slice(-HISTORY_TURNS)
+        .map((m) => ({
+          role: m.role,
+          content: (m.fullContent ?? m.content).trim(),
+        }));
+
       try {
-        await streamChat(text, "supervisor", (e: ChatStreamEvent) => {
+        await streamChat(
+          text,
+          "supervisor",
+          (e: ChatStreamEvent) => {
           if (e.type === "start") {
             setStatusLabel(`Routing to ${e.label}`);
           } else if (e.type === "status") {
@@ -301,7 +313,9 @@ export default function App() {
               { role: "assistant", content: `Sorry — ${e.message}` },
             ]);
           }
-        });
+          },
+          { history },
+        );
       } catch (err) {
         setMessages((m) => [
           ...m,
@@ -313,7 +327,7 @@ export default function App() {
         setStatusElapsedMs(0);
       }
     },
-    [sending],
+    [sending, messages],
   );
 
   const onSend = useCallback(() => {

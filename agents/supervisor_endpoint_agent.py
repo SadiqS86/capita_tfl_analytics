@@ -30,7 +30,11 @@ class SupervisorEndpointAgent:
     def endpoint_name(self) -> str:
         return (self._cfg.supervisor_endpoint or "").strip()
 
-    def query(self, question: str) -> dict[str, Any]:
+    def query(
+        self,
+        question: str,
+        history: list[dict[str, str]] | None = None,
+    ) -> dict[str, Any]:
         if not self.endpoint_name:
             return {
                 "answer": "Supervisor endpoint is not configured. Run "
@@ -51,7 +55,15 @@ class SupervisorEndpointAgent:
 
             url = f"{host}/serving-endpoints/{self.endpoint_name}/invocations"
             headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-            payload = {"input": [{"role": "user", "content": question}]}
+
+            messages: list[dict[str, str]] = []
+            for turn in history or []:
+                role = turn.get("role")
+                content = (turn.get("content") or "").strip()
+                if role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": content})
+            messages.append({"role": "user", "content": question})
+            payload = {"input": messages}
 
             response = requests.post(url, headers=headers, json=payload, timeout=180)
             response.raise_for_status()

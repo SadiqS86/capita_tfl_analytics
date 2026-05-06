@@ -5,9 +5,15 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
     mode: Literal["supervisor", "genie", "rag"] = "supervisor"
+    history: list[ChatTurn] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
