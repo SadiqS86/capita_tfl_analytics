@@ -39,6 +39,9 @@ class BootstrapResponse(BaseModel):
     persona_title: str
     domain_summary: str
     use_case_id: str
+    app_name: str = ""
+    app_logo_url: str = ""
+    app_logo_url_dark: str = ""
 
 
 class NextBestAction(BaseModel):

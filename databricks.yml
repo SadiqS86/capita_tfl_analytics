@@ -40,3 +40,15 @@ targets:
                 value: chat_memory
               - name: LAKEBASE_HOST
                 value: ep-little-leaf-e1nicyb4.database.eastus2.azuredatabricks.net
+              # ---- Branding (optional, override at any time without code changes) ----
+              # APP_NAME shows in the browser tab title and (when no logo is set) in the header.
+              - name: APP_NAME
+                value: Capita TfL Analytics
+              # APP_LOGO_URL: set to a relative path (e.g. /logo.png after dropping a file
+              # into frontend/public/ and rebuilding) OR an absolute URL to an external asset.
+              # Leave blank to hide the logo.
+              - name: APP_LOGO_URL
+                value: /logo.png
+              # Optional separate dark-mode logo (falls back to APP_LOGO_URL if unset).
+              - name: APP_LOGO_URL_DARK
+                value: ""

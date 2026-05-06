@@ -33,6 +33,9 @@ export async function fetchBootstrap() {
     persona_title: string;
     domain_summary: string;
     use_case_id: string;
+    app_name?: string;
+    app_logo_url?: string;
+    app_logo_url_dark?: string;
   }>(await fetch("/api/bootstrap"));
 }
 

@@ -14,5 +14,8 @@
   "lakebase_branch": "production",
   "lakebase_endpoint_id": "primary",
   "lakebase_database": "chat_memory",
-  "lakebase_host": "ep-little-leaf-e1nicyb4.database.eastus2.azuredatabricks.net"
+  "lakebase_host": "ep-little-leaf-e1nicyb4.database.eastus2.azuredatabricks.net",
+  "app_name": "Capita TfL Analytics",
+  "app_logo_url": "/logo.png",
+  "app_logo_url_dark": ""
 }

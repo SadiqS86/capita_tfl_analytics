@@ -451,6 +451,10 @@ export default function App() {
   const [sending, setSending] = useState(false);
   const [personaName, setPersonaName] = useState("Adam");
   const [personaTitle, setPersonaTitle] = useState("");
+  const [appName, setAppName] = useState("");
+  const [appLogoUrl, setAppLogoUrl] = useState("");
+  const [appLogoUrlDark, setAppLogoUrlDark] = useState("");
+  const [logoBroken, setLogoBroken] = useState(false);
 
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   type ChatMessage = {
@@ -511,6 +515,11 @@ export default function App() {
       .then((b) => {
         setPersonaName(b.persona_name.split(" ")[0] || "Adam");
         setPersonaTitle(b.persona_title);
+        setAppName(b.app_name || "");
+        setAppLogoUrl(b.app_logo_url || "");
+        setAppLogoUrlDark(b.app_logo_url_dark || b.app_logo_url || "");
+        setLogoBroken(false);
+        if (b.app_name) document.title = b.app_name;
       })
       .catch(() => {});
 
@@ -725,7 +734,34 @@ export default function App() {
         className={`border-b px-6 shrink-0 ${darkMode ? "bg-slate-800 border-slate-700" : "bg-white border-slate-200"}`}
       >
         <div className="flex items-center justify-between">
-          <div className="flex gap-6">
+          <div className="flex items-center gap-4">
+            {(() => {
+              const url = darkMode ? appLogoUrlDark || appLogoUrl : appLogoUrl;
+              if (!url || logoBroken) {
+                if (!appName) return null;
+                return (
+                  <div
+                    className={`text-sm font-semibold pr-4 border-r ${darkMode ? "text-white border-slate-700" : "text-slate-900 border-slate-200"}`}
+                  >
+                    {appName}
+                  </div>
+                );
+              }
+              return (
+                <div
+                  className={`flex items-center gap-2 pr-4 border-r ${darkMode ? "border-slate-700" : "border-slate-200"}`}
+                  title={appName || undefined}
+                >
+                  <img
+                    src={url}
+                    alt={appName || "App logo"}
+                    className="h-8 max-w-[160px] object-contain"
+                    onError={() => setLogoBroken(true)}
+                  />
+                </div>
+              );
+            })()}
+            <div className="flex gap-6">
             <button
               type="button"
               onClick={() => setActiveTab("dashboard")}
@@ -752,6 +788,7 @@ export default function App() {
             >
               Chat
             </button>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             {activeTab === "chat" && (

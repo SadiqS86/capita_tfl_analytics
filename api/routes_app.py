@@ -12,6 +12,7 @@ from databricks.sdk import WorkspaceClient
 from fastapi import APIRouter, BackgroundTasks
 from fastapi.responses import StreamingResponse
 
+import branding
 import db
 from agents.action_rules_agent import ActionRulesAgent
 from agents.genie_agent import GenieAgent
@@ -163,11 +164,15 @@ def start_new_conversation() -> dict[str, Any]:
 
 @router.get("/bootstrap", response_model=BootstrapResponse)
 def bootstrap() -> BootstrapResponse:
+    b = branding.get_branding()
     return BootstrapResponse(
         persona_name=UC_CONFIG.persona_name,
         persona_title=UC_CONFIG.persona_title,
         domain_summary=UC_CONFIG.domain_summary,
         use_case_id=UC_CONFIG.use_case_id,
+        app_name=b.get("app_name", ""),
+        app_logo_url=b.get("app_logo_url", ""),
+        app_logo_url_dark=b.get("app_logo_url_dark", ""),
     )
 
 
