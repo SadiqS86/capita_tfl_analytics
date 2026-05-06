@@ -43,8 +43,14 @@ export async function fetchSuggestions() {
   return parseJson<{ items: SuggestionItem[] }>(await fetch("/api/suggestions"));
 }
 
-export async function fetchContextualSuggestions(conversationId?: string | null) {
-  const qs = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : "";
+export async function fetchContextualSuggestions(
+  conversationId?: string | null,
+  preferredCategory?: string | null,
+) {
+  const params = new URLSearchParams();
+  if (conversationId) params.set("conversation_id", conversationId);
+  if (preferredCategory) params.set("preferred_category", preferredCategory);
+  const qs = params.toString() ? `?${params.toString()}` : "";
   return parseJson<{ items: SuggestionItem[]; source?: string }>(
     await fetch(`/api/suggestions/contextual${qs}`),
   );
@@ -77,6 +83,46 @@ export async function startNewConversation() {
     conversation_id: string | null;
     error?: string;
   }>(await fetch("/api/conversation/new", { method: "POST" }));
+}
+
+export type ConversationSummary = {
+  conversation_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  preview: string;
+};
+
+export async function listConversations(limit = 50) {
+  return parseJson<{ enabled: boolean; items: ConversationSummary[]; error?: string }>(
+    await fetch(`/api/conversations?limit=${limit}`),
+  );
+}
+
+export async function fetchConversation(conversationId: string) {
+  return parseJson<{
+    enabled: boolean;
+    conversation_id: string | null;
+    messages: StoredMessage[];
+    error?: string;
+  }>(await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`));
+}
+
+export async function renameConversation(conversationId: string, title: string) {
+  const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  return parseJson<{ ok: boolean; conversation_id: string; title: string }>(res);
+}
+
+export async function deleteConversation(conversationId: string) {
+  const res = await fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
+    method: "DELETE",
+  });
+  return parseJson<{ ok: boolean; conversation_id: string }>(res);
 }
 
 export async function fetchDashboardCharts() {
@@ -235,13 +281,24 @@ export async function streamChat(
   message: string,
   mode: "supervisor" | "genie" | "rag",
   onEvent: (e: ChatStreamEvent) => void,
-  options: { history?: ChatTurn[]; signal?: AbortSignal } = {},
+  options: {
+    history?: ChatTurn[];
+    signal?: AbortSignal;
+    preferredCategory?: string | null;
+    conversationId?: string | null;
+  } = {},
 ): Promise<void> {
-  const { history = [], signal } = options;
+  const { history = [], signal, preferredCategory = null, conversationId = null } = options;
   const res = await fetch("/api/chat/stream", {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-    body: JSON.stringify({ message, mode, history }),
+    body: JSON.stringify({
+      message,
+      mode,
+      history,
+      preferred_category: preferredCategory,
+      conversation_id: conversationId,
+    }),
     signal,
   });
   if (!res.ok || !res.body) {

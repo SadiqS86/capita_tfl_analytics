@@ -14,6 +14,14 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
     mode: Literal["supervisor", "genie", "rag"] = "supervisor"
     history: list[ChatTurn] = Field(default_factory=list)
+    preferred_category: str | None = Field(
+        default=None,
+        description="If the user clicked a suggestion from a specific category (e.g. 'SLA'), follow-ups bias toward it.",
+    )
+    conversation_id: str | None = Field(
+        default=None,
+        description="If set, append to that conversation; otherwise the latest active one is used.",
+    )
 
 
 class ChatResponse(BaseModel):

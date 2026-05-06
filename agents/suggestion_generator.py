@@ -24,14 +24,26 @@ DEFAULT_ENDPOINT = "databricks-claude-haiku-4-5"
 CATEGORIES = ("SLA", "Obligations", "Trends", "Suppliers", "Risk", "Contract")
 
 
-def _system_prompt(cfg: UseCaseConfig) -> str:
-    return (
+def _system_prompt(cfg: UseCaseConfig, preferred_category: str | None) -> str:
+    base = (
         f"You are a copilot helping {cfg.persona_name}, {cfg.persona_title}, "
         f"explore '{cfg.domain_summary}'. After each exchange you suggest 5 "
         "short, specific follow-up questions a senior leader would naturally "
         "ask next. Each question must be ≤90 chars, action-oriented, and "
         "categorised as one of: " + ", ".join(CATEGORIES) + ". "
-        "Respond with ONLY a JSON array (no prose, no markdown fencing) of "
+        "Each suggestion must be a logical follow-on from the most recent answer — "
+        "drill-downs, comparisons, root causes, or remediation actions are ideal. "
+        "Avoid repeating questions already asked in the conversation."
+    )
+    if preferred_category:
+        pc = preferred_category.strip()
+        base += (
+            f" The user's last action focused on the '{pc}' category, so AT LEAST 3 of 5 "
+            f"suggestions MUST have c='{pc}' and dig deeper into that area. "
+            "The remaining 1–2 may use a different category if they offer a clear cross-cut."
+        )
+    return base + (
+        " Respond with ONLY a JSON array (no prose, no markdown fencing) of "
         "5 objects: [{\"q\": \"…\", \"c\": \"SLA\"}, …]"
     )
 
@@ -47,7 +59,12 @@ class SuggestionGenerator:
         else:
             self.w = WorkspaceClient(profile=os.environ.get("DATABRICKS_CONFIG_PROFILE", "azure_demo"))
 
-    def generate(self, history: list[dict[str, str]], n: int = 5) -> list[dict[str, Any]]:
+    def generate(
+        self,
+        history: list[dict[str, str]],
+        n: int = 5,
+        preferred_category: str | None = None,
+    ) -> list[dict[str, Any]]:
         if not history:
             return []
         try:
@@ -60,18 +77,25 @@ class SuggestionGenerator:
             url = f"{host}/serving-endpoints/{self._endpoint}/invocations"
             headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
-            messages: list[dict[str, str]] = [{"role": "system", "content": _system_prompt(self._cfg)}]
+            messages: list[dict[str, str]] = [
+                {"role": "system", "content": _system_prompt(self._cfg, preferred_category)}
+            ]
             for turn in history[-8:]:
                 role = turn.get("role")
                 content = (turn.get("content") or "").strip()
                 if role in ("user", "assistant") and content:
                     messages.append({"role": role, "content": content[:1500]})
+            cat_hint = (
+                f" Bias at least 3 toward category '{preferred_category}'."
+                if preferred_category
+                else ""
+            )
             messages.append(
                 {
                     "role": "user",
                     "content": (
                         "Based on the conversation so far, return ONLY the JSON array of "
-                        f"{n} follow-up questions in the format described."
+                        f"{n} follow-up questions in the format described.{cat_hint}"
                     ),
                 }
             )

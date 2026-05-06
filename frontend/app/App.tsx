@@ -1,27 +1,49 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Send, Activity, Lightbulb, X, Moon, Sun, RotateCcw, Settings, Upload, type LucideIcon } from "lucide-react";
+import {
+  Send,
+  Activity,
+  Lightbulb,
+  X,
+  Moon,
+  Sun,
+  RotateCcw,
+  Settings,
+  Upload,
+  History,
+  Pencil,
+  Trash2,
+  Plus,
+  Check,
+  type LucideIcon,
+} from "lucide-react";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import * as LucideIcons from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  deleteConversation,
   fetchBootstrap,
   fetchBrandingSettings,
   fetchContextualSuggestions,
+  fetchConversation,
   fetchCurrentConversation,
   fetchDashboardCharts,
   fetchKpis,
   fetchPriorityActions,
   fetchSuggestions,
   generateNba,
+  listConversations,
+  renameConversation,
   saveBrandingSettings,
   startNewConversation,
   streamChat,
   uploadBrandingLogo,
   type BrandingResolved,
   type ChatStreamEvent,
+  type ConversationSummary,
   type KPIPayload,
   type NextBestAction,
+  type StoredMessage,
   type SuggestionItem,
 } from "./apiClient";
 
@@ -233,6 +255,225 @@ function urgencyStyle(urgency: NextBestAction["urgency"], darkMode: boolean) {
     border: "rgba(16,214,166,0.45)",
     label: "Monitor",
   };
+}
+
+type HistoryDrawerProps = {
+  darkMode: boolean;
+  items: ConversationSummary[];
+  loading: boolean;
+  error: string | null;
+  activeId: string | null;
+  renamingId: string | null;
+  renameDraft: string;
+  setRenamingId: (id: string | null) => void;
+  setRenameDraft: (s: string) => void;
+  onClose: () => void;
+  onRefresh: () => void;
+  onNew: () => void | Promise<void>;
+  onSelect: (id: string) => void;
+  onRename: (id: string, title: string) => void;
+  onDelete: (id: string) => void;
+};
+
+function relativeTime(iso?: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const diff = Date.now() - d.getTime();
+  const sec = Math.max(0, Math.floor(diff / 1000));
+  if (sec < 60) return "just now";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  if (day < 7) return `${day}d ago`;
+  return d.toLocaleDateString();
+}
+
+function HistoryDrawer({
+  darkMode,
+  items,
+  loading,
+  error,
+  activeId,
+  renamingId,
+  renameDraft,
+  setRenamingId,
+  setRenameDraft,
+  onClose,
+  onRefresh,
+  onNew,
+  onSelect,
+  onRename,
+  onDelete,
+}: HistoryDrawerProps) {
+  const panelBg = darkMode ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200";
+  const itemBg = darkMode ? "bg-slate-800 hover:bg-slate-750 border-slate-700" : "bg-white hover:bg-slate-50 border-slate-200";
+  const itemActive = darkMode ? "ring-2 ring-cyan-500/60" : "ring-2 ring-cyan-500/40";
+  const muted = darkMode ? "text-slate-400" : "text-slate-500";
+  const heading = darkMode ? "text-white" : "text-slate-900";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="flex-1 bg-black/50" />
+      <aside
+        className={`w-[380px] max-w-[85vw] h-full border-l shadow-2xl flex flex-col ${panelBg}`}
+      >
+        <div className={`flex items-center justify-between px-5 py-4 border-b ${darkMode ? "border-slate-700" : "border-slate-200"}`}>
+          <div className="flex items-center gap-2">
+            <History className={`w-5 h-5 ${darkMode ? "text-cyan-400" : "text-cyan-600"}`} />
+            <h3 className={`text-base font-semibold ${heading}`}>Conversation history</h3>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onRefresh}
+              title="Refresh"
+              className={`p-2 rounded-lg ${darkMode ? "text-slate-300 hover:bg-slate-800" : "text-slate-600 hover:bg-slate-100"}`}
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className={`p-2 rounded-lg ${darkMode ? "text-slate-300 hover:bg-slate-800" : "text-slate-600 hover:bg-slate-100"}`}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        <div className={`px-5 py-3 border-b ${darkMode ? "border-slate-700" : "border-slate-200"}`}>
+          <button
+            type="button"
+            onClick={() => void onNew()}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-white text-sm font-medium hover:opacity-90"
+            style={{ backgroundColor: CAPITA_COLORS.navyBlue }}
+          >
+            <Plus className="w-4 h-4" />
+            New chat
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-auto px-3 py-3 space-y-2">
+          {loading && (
+            <div className={`text-sm px-2 py-3 ${muted}`}>Loading conversations…</div>
+          )}
+          {error && (
+            <div className={`text-sm px-2 py-3 ${darkMode ? "text-rose-300" : "text-rose-600"}`}>
+              {error}
+            </div>
+          )}
+          {!loading && !error && items.length === 0 && (
+            <div className={`text-sm px-2 py-3 ${muted}`}>
+              No conversations yet — start a new chat to begin.
+            </div>
+          )}
+          {items.map((it) => {
+            const isActive = it.conversation_id === activeId;
+            const isRenaming = renamingId === it.conversation_id;
+            return (
+              <div
+                key={it.conversation_id}
+                className={`group relative rounded-lg border p-3 cursor-pointer transition-colors ${itemBg} ${isActive ? itemActive : ""}`}
+                onClick={() => {
+                  if (!isRenaming) onSelect(it.conversation_id);
+                }}
+              >
+                {isRenaming ? (
+                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="text"
+                      autoFocus
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") onRename(it.conversation_id, renameDraft);
+                        else if (e.key === "Escape") {
+                          setRenamingId(null);
+                          setRenameDraft("");
+                        }
+                      }}
+                      className={`flex-1 px-2 py-1.5 text-sm rounded border ${
+                        darkMode
+                          ? "bg-slate-900 border-slate-700 text-white"
+                          : "bg-white border-slate-300 text-slate-900"
+                      }`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => onRename(it.conversation_id, renameDraft)}
+                      className="p-1.5 rounded text-emerald-500 hover:bg-emerald-500/10"
+                      title="Save"
+                    >
+                      <Check className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRenamingId(null);
+                        setRenameDraft("");
+                      }}
+                      className="p-1.5 rounded text-slate-400 hover:bg-slate-500/10"
+                      title="Cancel"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div className={`text-sm font-medium truncate pr-12 ${heading}`}>
+                      {it.title}
+                    </div>
+                    {it.preview && (
+                      <div className={`text-xs mt-1 truncate ${muted}`}>{it.preview}</div>
+                    )}
+                    <div className={`text-[11px] mt-1.5 flex items-center gap-2 ${muted}`}>
+                      <span>{relativeTime(it.updated_at)}</span>
+                      <span>·</span>
+                      <span>
+                        {it.message_count} {it.message_count === 1 ? "message" : "messages"}
+                      </span>
+                    </div>
+                    <div
+                      className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRenamingId(it.conversation_id);
+                          setRenameDraft(it.title);
+                        }}
+                        className={`p-1.5 rounded ${darkMode ? "text-slate-300 hover:bg-slate-700" : "text-slate-500 hover:bg-slate-200"}`}
+                        title="Rename"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDelete(it.conversation_id)}
+                        className={`p-1.5 rounded ${darkMode ? "text-rose-400 hover:bg-rose-900/30" : "text-rose-500 hover:bg-rose-100"}`}
+                        title="Delete"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </aside>
+    </div>
+  );
 }
 
 function NBAModal({ actions, loading, error, darkMode, onClose }: NBAModalProps) {
@@ -785,6 +1026,13 @@ export default function App() {
   const [statusElapsedMs, setStatusElapsedMs] = useState<number>(0);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [suggestionsRefreshing, setSuggestionsRefreshing] = useState(false);
+  const [lastClickedCategory, setLastClickedCategory] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyItems, setHistoryItems] = useState<ConversationSummary[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
 
   const [nbaModalOpen, setNbaModalOpen] = useState(false);
   const [nbaActions, setNbaActions] = useState<NextBestAction[] | null>(null);
@@ -887,7 +1135,7 @@ export default function App() {
   }, [activeTab]);
 
   const submitMessage = useCallback(
-    async (raw: string) => {
+    async (raw: string, opts: { preferredCategory?: string | null } = {}) => {
       const text = raw.trim();
       if (!text || sending) return;
       setChatInput("");
@@ -895,6 +1143,11 @@ export default function App() {
       setStatusLabel("Routing question…");
       setStatusElapsedMs(0);
       setMessages((m) => [...m, { role: "user", content: text }]);
+      if (opts.preferredCategory === undefined) {
+        // Free-text submission resets the category bias so manual refresh
+        // doesn't keep returning suggestions skewed to a stale category.
+        setLastClickedCategory(null);
+      }
 
       const HISTORY_TURNS = 6;
       const history = messages
@@ -946,7 +1199,11 @@ export default function App() {
               ]);
             }
           },
-          { history },
+          {
+            history,
+            preferredCategory: opts.preferredCategory ?? null,
+            conversationId: conversationId,
+          },
         );
       } catch (err) {
         setMessages((m) => [
@@ -959,7 +1216,7 @@ export default function App() {
         setStatusElapsedMs(0);
       }
     },
-    [sending, messages],
+    [sending, messages, conversationId],
   );
 
   const onSend = useCallback(() => {
@@ -970,7 +1227,10 @@ export default function App() {
     if (suggestionsRefreshing) return;
     setSuggestionsRefreshing(true);
     try {
-      const r = await fetchContextualSuggestions(conversationId || undefined);
+      const r = await fetchContextualSuggestions(
+        conversationId || undefined,
+        lastClickedCategory || undefined,
+      );
       if (r.items?.length) setSuggestions(r.items);
     } catch {
       try {
@@ -982,7 +1242,7 @@ export default function App() {
     } finally {
       setSuggestionsRefreshing(false);
     }
-  }, [conversationId, suggestionsRefreshing]);
+  }, [conversationId, suggestionsRefreshing, lastClickedCategory]);
 
   const openNbaFromConversation = useCallback(async () => {
     setNbaError(null);
@@ -1033,10 +1293,102 @@ export default function App() {
       setConversationId(null);
     }
     setMessages([]);
+    setLastClickedCategory(null);
     fetchSuggestions()
       .then((r) => setSuggestions(r.items || []))
       .catch(() => {});
   }, [sending]);
+
+  const refreshHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const r = await listConversations(50);
+      if (!r.enabled) {
+        setHistoryError("Conversation history requires Lakebase to be configured.");
+        setHistoryItems([]);
+      } else {
+        setHistoryItems(r.items || []);
+      }
+    } catch (err) {
+      setHistoryError(String(err));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  const openHistory = useCallback(() => {
+    setHistoryOpen(true);
+    void refreshHistory();
+  }, [refreshHistory]);
+
+  const switchConversation = useCallback(
+    async (id: string) => {
+      if (sending || !id) return;
+      try {
+        const r = await fetchConversation(id);
+        const list = (r.messages || []) as StoredMessage[];
+        setConversationId(r.conversation_id || id);
+        setMessages(
+          list.map((m) => ({
+            role: m.role,
+            content: m.content,
+            fullContent: m.content,
+            routed: m.routed_to || undefined,
+            elapsedMs: m.elapsed_ms || undefined,
+          })),
+        );
+        setLastClickedCategory(null);
+        try {
+          const s = await fetchContextualSuggestions(r.conversation_id || id);
+          if (s.items?.length) setSuggestions(s.items);
+        } catch {
+          /* ignore */
+        }
+      } catch (err) {
+        setHistoryError(String(err));
+        return;
+      }
+      setHistoryOpen(false);
+    },
+    [sending],
+  );
+
+  const onRenameConversation = useCallback(
+    async (id: string, title: string) => {
+      const t = (title || "").trim();
+      if (!t) return;
+      try {
+        await renameConversation(id, t);
+        setHistoryItems((items) =>
+          items.map((it) => (it.conversation_id === id ? { ...it, title: t } : it)),
+        );
+      } catch (err) {
+        setHistoryError(String(err));
+      } finally {
+        setRenamingId(null);
+        setRenameDraft("");
+      }
+    },
+    [],
+  );
+
+  const onDeleteConversation = useCallback(
+    async (id: string) => {
+      if (!confirm("Delete this conversation? This cannot be undone.")) return;
+      try {
+        await deleteConversation(id);
+        setHistoryItems((items) => items.filter((it) => it.conversation_id !== id));
+        if (conversationId === id) {
+          setConversationId(null);
+          setMessages([]);
+        }
+      } catch (err) {
+        setHistoryError(String(err));
+      }
+    },
+    [conversationId],
+  );
 
   const starterChips = suggestions.slice(0, 5);
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
@@ -1055,6 +1407,28 @@ export default function App() {
             setLogoBroken(false);
             if (r.app_name) document.title = r.app_name;
           }}
+        />
+      )}
+      {historyOpen && (
+        <HistoryDrawer
+          darkMode={darkMode}
+          items={historyItems}
+          loading={historyLoading}
+          error={historyError}
+          activeId={conversationId}
+          renamingId={renamingId}
+          renameDraft={renameDraft}
+          setRenamingId={setRenamingId}
+          setRenameDraft={setRenameDraft}
+          onClose={() => setHistoryOpen(false)}
+          onRefresh={() => void refreshHistory()}
+          onNew={async () => {
+            await onNewThread();
+            setHistoryOpen(false);
+          }}
+          onSelect={(id) => void switchConversation(id)}
+          onRename={(id, title) => void onRenameConversation(id, title)}
+          onDelete={(id) => void onDeleteConversation(id)}
         />
       )}
       <div
@@ -1119,18 +1493,31 @@ export default function App() {
           </div>
           <div className="flex items-center gap-2">
             {activeTab === "chat" && (
-              <button
-                type="button"
-                onClick={() => void onNewThread()}
-                disabled={sending}
-                title="Start a new conversation"
-                className={`p-2 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 ${
-                  darkMode ? "bg-slate-700 text-slate-200 hover:bg-slate-600" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                }`}
-              >
-                <RotateCcw className="w-4 h-4" />
-                <span className="text-xs font-medium">New thread</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={openHistory}
+                  title="Conversation history"
+                  className={`p-2 rounded-lg transition-colors flex items-center gap-2 ${
+                    darkMode ? "bg-slate-700 text-slate-200 hover:bg-slate-600" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  }`}
+                >
+                  <History className="w-4 h-4" />
+                  <span className="text-xs font-medium">History</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onNewThread()}
+                  disabled={sending}
+                  title="Start a new conversation"
+                  className={`p-2 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 ${
+                    darkMode ? "bg-slate-700 text-slate-200 hover:bg-slate-600" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  }`}
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span className="text-xs font-medium">New thread</span>
+                </button>
+              </>
             )}
             <button
               type="button"
@@ -1192,7 +1579,10 @@ export default function App() {
                   <button
                     type="button"
                     key={`${chip.question}-${i}`}
-                    onClick={() => void submitMessage(chip.question)}
+                    onClick={() => {
+                      setLastClickedCategory(chip.category || null);
+                      void submitMessage(chip.question, { preferredCategory: chip.category || null });
+                    }}
                     disabled={sending}
                     className={`w-full text-left rounded-xl border p-4 transition-all hover:shadow-md disabled:opacity-50 ${
                       darkMode ? "bg-slate-800 border-slate-700 hover:bg-slate-750" : "bg-white border-slate-200 hover:bg-slate-50"

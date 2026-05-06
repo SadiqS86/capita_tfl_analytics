@@ -169,6 +169,15 @@ def get_or_create_active_conversation(user_id: str, use_case_id: str = _DEFAULT_
     return create_conversation(user_id, use_case_id)
 
 
+def _derive_title_from_message(content: str, max_chars: int = 80) -> str:
+    text = (content or "").strip().replace("\n", " ")
+    if not text:
+        return "Untitled conversation"
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
+
 def append_message(
     conversation_id: str,
     role: str,
@@ -186,11 +195,109 @@ def append_message(
             """,
             (conversation_id, role, content, routed_to, sql_text, elapsed_ms),
         )
+        # Auto-title: when the first user message arrives and the conversation
+        # has no title yet, derive one from the message text so the history
+        # drawer shows something meaningful instead of "Conversation #abcdef".
+        if role == "user":
+            cur.execute(
+                """
+                UPDATE conversations
+                SET title = %s,
+                    updated_at = now()
+                WHERE conversation_id = %s
+                  AND (title IS NULL OR length(trim(title)) = 0)
+                """,
+                (_derive_title_from_message(content), conversation_id),
+            )
         cur.execute(
             "UPDATE conversations SET updated_at = now() WHERE conversation_id = %s",
             (conversation_id,),
         )
         c.commit()
+
+
+def list_conversations(
+    user_id: str,
+    use_case_id: str = _DEFAULT_USE_CASE,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return recent conversations for a user with title + counts + preview."""
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                c.conversation_id::text AS conversation_id,
+                COALESCE(NULLIF(trim(c.title), ''), 'Untitled conversation') AS title,
+                to_char(c.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+                to_char(c.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at,
+                COALESCE((SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.conversation_id), 0)
+                    AS message_count,
+                (
+                    SELECT m.content
+                    FROM messages m
+                    WHERE m.conversation_id = c.conversation_id
+                      AND m.role = 'user'
+                    ORDER BY m.created_at DESC
+                    LIMIT 1
+                ) AS last_user_message
+            FROM conversations c
+            WHERE c.user_id = %s AND c.use_case_id = %s
+            ORDER BY c.updated_at DESC
+            LIMIT %s
+            """,
+            (user_id, use_case_id, limit),
+        )
+        rows = list(cur.fetchall())
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        preview = (r.get("last_user_message") or "").strip()
+        if len(preview) > 140:
+            preview = preview[:139].rstrip() + "…"
+        out.append(
+            {
+                "conversation_id": r["conversation_id"],
+                "title": r["title"],
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+                "message_count": int(r["message_count"]),
+                "preview": preview,
+            }
+        )
+    return out
+
+
+def rename_conversation(conversation_id: str, title: str) -> bool:
+    title = (title or "").strip()
+    if not title:
+        return False
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            "UPDATE conversations SET title = %s, updated_at = now() WHERE conversation_id = %s",
+            (title[:200], conversation_id),
+        )
+        c.commit()
+        return cur.rowcount > 0
+
+
+def delete_conversation(conversation_id: str) -> bool:
+    with conn() as c, c.cursor() as cur:
+        cur.execute("DELETE FROM messages WHERE conversation_id = %s", (conversation_id,))
+        cur.execute("DELETE FROM conversations WHERE conversation_id = %s", (conversation_id,))
+        c.commit()
+        return cur.rowcount > 0
+
+
+def conversation_owner(conversation_id: str) -> tuple[str, str] | None:
+    """Return ``(user_id, use_case_id)`` for a conversation, or None if missing."""
+    with conn() as c, c.cursor() as cur:
+        cur.execute(
+            "SELECT user_id, use_case_id FROM conversations WHERE conversation_id = %s",
+            (conversation_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return row["user_id"], row["use_case_id"]
 
 
 def load_messages(conversation_id: str, limit: int = 50) -> list[dict[str, Any]]:

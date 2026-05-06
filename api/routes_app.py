@@ -163,6 +163,74 @@ def start_new_conversation() -> dict[str, Any]:
         return {"enabled": True, "conversation_id": None, "error": str(exc)}
 
 
+@router.get("/conversations")
+def list_conversations(limit: int = 50) -> dict[str, Any]:
+    """List the user's recent conversations (Genie-style history sidebar)."""
+    if not db.is_enabled():
+        return {"enabled": False, "items": []}
+    try:
+        items = db.list_conversations(DEMO_USER_ID, UC_CONFIG.use_case_id, limit=limit)
+        return {"enabled": True, "items": items}
+    except Exception as exc:
+        return {"enabled": True, "items": [], "error": str(exc)}
+
+
+@router.get("/conversations/{conversation_id}")
+def get_conversation(conversation_id: str) -> dict[str, Any]:
+    """Load all messages for a specific conversation (used when switching threads)."""
+    if not db.is_enabled():
+        return {"enabled": False, "conversation_id": None, "messages": []}
+    try:
+        owner = db.conversation_owner(conversation_id)
+        if not owner or owner[0] != DEMO_USER_ID:
+            raise HTTPException(404, "Conversation not found")
+        return {
+            "enabled": True,
+            "conversation_id": conversation_id,
+            "messages": db.load_messages(conversation_id, limit=500),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        return {
+            "enabled": True,
+            "conversation_id": conversation_id,
+            "messages": [],
+            "error": str(exc),
+        }
+
+
+class _RenameBody(BaseModel):
+    title: str = ""
+
+
+@router.patch("/conversations/{conversation_id}")
+def rename_conversation(conversation_id: str, body: _RenameBody) -> dict[str, Any]:
+    if not db.is_enabled():
+        raise HTTPException(503, "Lakebase is not configured")
+    title = (body.title or "").strip()
+    if not title:
+        raise HTTPException(400, "title is required")
+    owner = db.conversation_owner(conversation_id)
+    if not owner or owner[0] != DEMO_USER_ID:
+        raise HTTPException(404, "Conversation not found")
+    ok = db.rename_conversation(conversation_id, title)
+    if not ok:
+        raise HTTPException(500, "Rename failed")
+    return {"ok": True, "conversation_id": conversation_id, "title": title}
+
+
+@router.delete("/conversations/{conversation_id}")
+def delete_conversation(conversation_id: str) -> dict[str, Any]:
+    if not db.is_enabled():
+        raise HTTPException(503, "Lakebase is not configured")
+    owner = db.conversation_owner(conversation_id)
+    if not owner or owner[0] != DEMO_USER_ID:
+        raise HTTPException(404, "Conversation not found")
+    ok = db.delete_conversation(conversation_id)
+    return {"ok": ok, "conversation_id": conversation_id}
+
+
 @router.get("/bootstrap", response_model=BootstrapResponse)
 def bootstrap() -> BootstrapResponse:
     b = branding.get_branding()
@@ -330,10 +398,15 @@ def suggestions() -> dict[str, Any]:
 
 
 @router.get("/suggestions/contextual")
-def contextual_suggestions(conversation_id: str | None = None) -> dict[str, Any]:
+def contextual_suggestions(
+    conversation_id: str | None = None,
+    preferred_category: str | None = None,
+) -> dict[str, Any]:
     """Generate fresh follow-up questions based on the latest conversation.
 
-    Falls back to seeded suggestions when no conversation exists yet.
+    Falls back to seeded suggestions when no conversation exists yet. When
+    ``preferred_category`` is set (e.g. the user just clicked an "SLA" card),
+    the LLM is instructed to bias 3 of 5 suggestions toward that category.
     """
     history: list[dict[str, str]] = []
     if conversation_id and db.is_enabled():
@@ -353,7 +426,9 @@ def contextual_suggestions(conversation_id: str | None = None) -> dict[str, Any]
         lp = LeaderProfileAgent(UC_CONFIG, warehouse_id=_warehouse_id() or None)
         return {"items": lp.get_top_questions(5), "source": "seed"}
 
-    items = SuggestionGenerator(UC_CONFIG).generate(history, n=5)
+    items = SuggestionGenerator(UC_CONFIG).generate(
+        history, n=5, preferred_category=preferred_category
+    )
     if not items:
         lp = LeaderProfileAgent(UC_CONFIG, warehouse_id=_warehouse_id() or None)
         return {"items": lp.get_top_questions(5), "source": "fallback"}
@@ -584,7 +659,14 @@ async def chat_stream(body: ChatRequest, background_tasks: BackgroundTasks) -> S
     history: list[dict[str, str]] = [t.model_dump() for t in body.history]
     if db.is_enabled():
         try:
-            conv_id = db.get_or_create_active_conversation(DEMO_USER_ID, UC_CONFIG.use_case_id)
+            requested_id = (body.conversation_id or "").strip() or None
+            if requested_id:
+                # Trust only conversations actually owned by the demo user.
+                owner = db.conversation_owner(requested_id)
+                if owner and owner[0] == DEMO_USER_ID:
+                    conv_id = requested_id
+            if not conv_id:
+                conv_id = db.get_or_create_active_conversation(DEMO_USER_ID, UC_CONFIG.use_case_id)
             history = db.recent_history(conv_id, max_turns=12)
             db.append_message(conv_id, "user", msg)
         except Exception as exc:
@@ -749,7 +831,14 @@ async def chat_stream(body: ChatRequest, background_tasks: BackgroundTasks) -> S
         ]
         try:
             sgen = SuggestionGenerator(UC_CONFIG)
-            sug_future = loop.run_in_executor(None, lambda: sgen.generate(followup_history, n=5))
+            sug_future = loop.run_in_executor(
+                None,
+                lambda: sgen.generate(
+                    followup_history,
+                    n=5,
+                    preferred_category=body.preferred_category,
+                ),
+            )
             while not sug_future.done():
                 try:
                     await asyncio.wait_for(asyncio.shield(sug_future), timeout=0.5)
