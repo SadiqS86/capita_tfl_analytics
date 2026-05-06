@@ -50,11 +50,42 @@ export default function App() {
   const [personaTitle, setPersonaTitle] = useState("");
 
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
-  const [messages, setMessages] = useState<
-    { role: "user" | "assistant"; content: string; followups?: string[]; routed?: string; elapsedMs?: number }[]
-  >([]);
+  type ChatMessage = {
+    role: "user" | "assistant";
+    content: string;
+    followups?: string[];
+    routed?: string;
+    elapsedMs?: number;
+    typing?: boolean;
+    fullContent?: string;
+  };
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [statusLabel, setStatusLabel] = useState<string | null>(null);
   const [statusElapsedMs, setStatusElapsedMs] = useState<number>(0);
+
+  // Typewriter animation: progressively reveal content of any message with `typing: true`.
+  useEffect(() => {
+    const target = messages.findIndex((m) => m.role === "assistant" && m.typing);
+    if (target === -1) return;
+    const m = messages[target];
+    const full = m.fullContent ?? m.content;
+    if (m.content.length >= full.length) {
+      setMessages((curr) =>
+        curr.map((mm, i) => (i === target ? { ...mm, typing: false, content: full } : mm)),
+      );
+      return;
+    }
+    const remaining = full.length - m.content.length;
+    const step = Math.max(1, Math.min(8, Math.ceil(remaining / 60)));
+    const id = setTimeout(() => {
+      setMessages((curr) =>
+        curr.map((mm, i) =>
+          i === target ? { ...mm, content: full.slice(0, mm.content.length + step) } : mm,
+        ),
+      );
+    }, 16);
+    return () => clearTimeout(id);
+  }, [messages]);
 
   const [kpis, setKpis] = useState<KPIPayload[]>([]);
   const [complianceSeries, setComplianceSeries] = useState<{ month: string; compliance: number }[]>([]);
@@ -118,7 +149,9 @@ export default function App() {
               ...m,
               {
                 role: "assistant",
-                content: e.answer,
+                content: "",
+                fullContent: e.answer,
+                typing: true,
                 followups: e.suggested_followups,
                 routed: e.routed_to || e.route || undefined,
                 elapsedMs: e.elapsed_ms,
@@ -249,31 +282,52 @@ export default function App() {
                 Start from a suggested question below, or type your own.
               </p>
             )}
-            {messages.map((msg, idx) => (
-              <div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div
-                  className={`max-w-3xl rounded-lg p-4 whitespace-pre-wrap ${
-                    msg.role === "user"
-                      ? "text-white"
-                      : darkMode
-                        ? "bg-slate-800 border border-slate-700"
-                        : "bg-white border border-slate-200"
-                  }`}
-                  style={msg.role === "user" ? { backgroundColor: CAPITA_COLORS.navyBlue } : undefined}
-                >
-                  <p className={`text-sm ${msg.role === "user" ? "text-white" : darkMode ? "text-slate-200" : "text-slate-800"}`}>
-                    {msg.content}
-                  </p>
-                  {msg.role === "assistant" && (msg.routed || msg.elapsedMs != null) && (
-                    <p className={`text-xs mt-2 ${darkMode ? "text-slate-500" : "text-slate-500"}`}>
-                      {msg.routed ? `Routed: ${msg.routed}` : ""}
-                      {msg.routed && msg.elapsedMs != null ? " · " : ""}
-                      {msg.elapsedMs != null ? `${(msg.elapsedMs / 1000).toFixed(1)}s` : ""}
+            {messages.map((msg, idx) => {
+              const isUser = msg.role === "user";
+              const assistantBg = darkMode
+                ? "rgba(0,163,224,0.08)"
+                : "rgba(0,163,224,0.06)";
+              const assistantBorder = darkMode
+                ? "rgba(0,163,224,0.30)"
+                : "rgba(0,163,224,0.25)";
+              return (
+                <div key={idx} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+                  <div
+                    className="max-w-3xl rounded-lg p-4 whitespace-pre-wrap border"
+                    style={
+                      isUser
+                        ? {
+                            backgroundColor: CAPITA_COLORS.navyBlue,
+                            borderColor: CAPITA_COLORS.navyBlue,
+                            color: "white",
+                          }
+                        : {
+                            backgroundColor: assistantBg,
+                            borderColor: assistantBorder,
+                            color: darkMode ? "#e2e8f0" : "#0f172a",
+                          }
+                    }
+                  >
+                    <p className={`text-sm ${isUser ? "text-white" : ""}`}>
+                      {msg.content}
+                      {msg.role === "assistant" && msg.typing && (
+                        <span
+                          className="inline-block w-[2px] h-4 align-middle ml-0.5 animate-pulse"
+                          style={{ backgroundColor: CAPITA_COLORS.cyan }}
+                        />
+                      )}
                     </p>
-                  )}
+                    {msg.role === "assistant" && !msg.typing && (msg.routed || msg.elapsedMs != null) && (
+                      <p className={`text-xs mt-2 ${darkMode ? "text-slate-500" : "text-slate-500"}`}>
+                        {msg.routed ? `Routed: ${msg.routed}` : ""}
+                        {msg.routed && msg.elapsedMs != null ? " · " : ""}
+                        {msg.elapsedMs != null ? `${(msg.elapsedMs / 1000).toFixed(1)}s` : ""}
+                      </p>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {sending && (
               <div className="flex justify-start">
                 <div

@@ -76,23 +76,38 @@ class SupervisorEndpointAgent:
             }
 
     def _extract_text(self, response_json: dict[str, Any]) -> str:
-        """Pull human-readable text from common Agent Bricks response shapes."""
+        """Pull final human-readable text from Agent Bricks responses.
+
+        Agent responses contain multiple message blocks: tool-use announcements,
+        tool results, and finally the synthesis. We want only the **last**
+        ``output_text`` (the agent's final answer to the user) — earlier blocks
+        like "I'll check our SLA performance..." are intermediate reasoning.
+        """
         outputs = response_json.get("output", [])
+        text_blocks: list[str] = []
         for o in outputs:
             if not isinstance(o, dict):
                 continue
-            if o.get("type") == "message":
-                for item in o.get("content", []) or []:
-                    if isinstance(item, dict) and item.get("type") == "output_text":
-                        text = item.get("text")
-                        if text:
-                            return text
+            if o.get("type") != "message":
+                continue
+            if o.get("role") and o.get("role") != "assistant":
+                continue
+            for item in o.get("content", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "output_text":
+                    text = (item.get("text") or "").strip()
+                    if text:
+                        text_blocks.append(text)
+
+        if text_blocks:
+            return text_blocks[-1] if len(text_blocks) > 1 else text_blocks[0]
 
         choices = response_json.get("choices") or []
         for c in choices:
             msg = (c or {}).get("message") or {}
             if msg.get("content"):
-                return msg["content"]
+                return str(msg["content"])
 
         if isinstance(response_json.get("output_text"), str):
             return response_json["output_text"]
