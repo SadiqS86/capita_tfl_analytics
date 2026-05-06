@@ -40,6 +40,13 @@ export async function fetchSuggestions() {
   return parseJson<{ items: SuggestionItem[] }>(await fetch("/api/suggestions"));
 }
 
+export async function fetchContextualSuggestions(conversationId?: string | null) {
+  const qs = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : "";
+  return parseJson<{ items: SuggestionItem[]; source?: string }>(
+    await fetch(`/api/suggestions/contextual${qs}`),
+  );
+}
+
 export async function fetchKpis() {
   return parseJson<KPIPayload[]>(await fetch("/api/kpis"));
 }
@@ -77,6 +84,40 @@ export async function fetchDashboardCharts() {
   }>(await fetch("/api/dashboard/charts"));
 }
 
+export type NextBestAction = {
+  action: string;
+  urgency: "Immediate" | "This Week" | "Monitor";
+  rationale: string;
+  owner_role: string;
+  contract_ref: string;
+};
+
+export async function fetchPriorityActions() {
+  return parseJson<{
+    actions: NextBestAction[];
+    summary: Record<string, number>;
+    metrics: Record<string, unknown>;
+    matched_rule_count: number;
+  }>(await fetch("/api/priority-actions"));
+}
+
+export async function generateNba(
+  history: { role: "user" | "assistant"; content: string }[],
+  answer = "",
+  conversationId: string | null = null,
+) {
+  const res = await fetch("/api/nba", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ history, answer, conversation_id: conversationId }),
+  });
+  return parseJson<{
+    actions: NextBestAction[];
+    matched_rule_count: number;
+    data_context: Record<string, unknown>;
+  }>(res);
+}
+
 export type ChatTurn = { role: "user" | "assistant"; content: string };
 
 export async function sendChatMessage(
@@ -99,9 +140,15 @@ export async function sendChatMessage(
 }
 
 export type ChatStreamEvent =
-  | { type: "start"; route: string; label: string }
+  | {
+      type: "start";
+      route: string;
+      label: string;
+      conversation_id?: string | null;
+      nba_intent?: boolean;
+    }
   | { type: "status"; label: string; elapsed_ms: number }
-  | { type: "heartbeat"; elapsed_ms: number }
+  | { type: "heartbeat"; elapsed_ms?: number; phase?: string }
   | {
       type: "answer";
       answer: string;
@@ -111,6 +158,14 @@ export type ChatStreamEvent =
       sources?: { document?: string; page?: number | null; url?: string }[];
       suggested_followups: string[];
       elapsed_ms: number;
+      conversation_id?: string | null;
+    }
+  | { type: "suggestions"; items: SuggestionItem[] }
+  | {
+      type: "nba";
+      actions: NextBestAction[];
+      matched_rule_count: number;
+      data_context: Record<string, unknown>;
     }
   | { type: "error"; message: string }
   | { type: "done" };

@@ -68,3 +68,19 @@ CREATE TABLE IF NOT EXISTS `__CATALOG__`.`__SCHEMA__`.`leader_profiles` (
 USING DELTA
 PARTITIONED BY (persona_id)
 COMMENT 'Leader prompt learning — weighted suggestions per persona';
+
+-- DDL_SPLIT
+CREATE TABLE IF NOT EXISTS `__CATALOG__`.`__SCHEMA__`.`action_rules` (
+  rule_id           STRING NOT NULL,
+  use_case_id       STRING NOT NULL,
+  trigger_metric    STRING NOT NULL COMMENT 'sla_compliance_pct | obligation_status | supplier_overall_score | sla_breaches_count | days_to_next_audit',
+  trigger_condition STRING NOT NULL COMMENT 'e.g. "< 90", "= Breached", ">= 3"',
+  urgency           STRING NOT NULL COMMENT 'Immediate | This Week | Monitor',
+  action_text       STRING NOT NULL,
+  owner_role        STRING NOT NULL,
+  contract_ref      STRING,
+  active            BOOLEAN NOT NULL,
+  created_ts        TIMESTAMP NOT NULL
+)
+USING DELTA
+COMMENT 'Configurable threshold rules for Next Best Action generation (Phase 6)';

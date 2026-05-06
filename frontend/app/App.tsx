@@ -6,14 +6,18 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   fetchBootstrap,
+  fetchContextualSuggestions,
   fetchCurrentConversation,
   fetchDashboardCharts,
   fetchKpis,
+  fetchPriorityActions,
   fetchSuggestions,
+  generateNba,
   startNewConversation,
   streamChat,
   type ChatStreamEvent,
   type KPIPayload,
+  type NextBestAction,
   type SuggestionItem,
 } from "./apiClient";
 
@@ -28,6 +32,21 @@ const CAPITA_COLORS = {
 };
 
 const CHART_FILLS = ["#00A3E0", "#C5D201", "#9B62C3", "#10D6A6", "#003B5C"];
+
+const CATEGORY_COLORS: Record<string, string> = {
+  SLA: "#003B5C",
+  Obligations: "#00A3E0",
+  Trends: "#10D6A6",
+  Suppliers: "#C5D201",
+  Risk: "#E0566A",
+  Contract: "#9B62C3",
+  Insights: "#0D5A85",
+};
+
+function categoryColor(c?: string | null): string {
+  if (!c) return CAPITA_COLORS.navyBlue;
+  return CATEGORY_COLORS[c] || CAPITA_COLORS.navyBlue;
+}
 
 function iconByName(name: string): LucideIcon {
   const I = (LucideIcons as unknown as Record<string, LucideIcon>)[name];
@@ -179,13 +198,257 @@ function AssistantBubbleContent({
   );
 }
 
+type NBAModalProps = {
+  actions: NextBestAction[] | null;
+  loading: boolean;
+  error: string | null;
+  darkMode: boolean;
+  onClose: () => void;
+};
+
+function urgencyStyle(urgency: NextBestAction["urgency"], darkMode: boolean) {
+  if (urgency === "Immediate") {
+    return {
+      dot: "#E0566A",
+      bg: darkMode ? "rgba(224,86,106,0.15)" : "rgba(224,86,106,0.08)",
+      border: "rgba(224,86,106,0.45)",
+      label: "Immediate",
+    };
+  }
+  if (urgency === "This Week") {
+    return {
+      dot: "#F59E0B",
+      bg: darkMode ? "rgba(245,158,11,0.15)" : "rgba(245,158,11,0.08)",
+      border: "rgba(245,158,11,0.45)",
+      label: "This Week",
+    };
+  }
+  return {
+    dot: "#10D6A6",
+    bg: darkMode ? "rgba(16,214,166,0.12)" : "rgba(16,214,166,0.08)",
+    border: "rgba(16,214,166,0.45)",
+    label: "Monitor",
+  };
+}
+
+function NBAModal({ actions, loading, error, darkMode, onClose }: NBAModalProps) {
+  return (
+    <div
+      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className={`rounded-xl shadow-2xl max-w-2xl w-full max-h-[85vh] overflow-auto ${darkMode ? "bg-slate-800" : "bg-white"}`}
+      >
+        <div
+          className={`sticky top-0 z-10 border-b p-6 flex items-center justify-between ${darkMode ? "border-slate-700 bg-slate-800" : "border-slate-200 bg-white"}`}
+        >
+          <div>
+            <h3 className={`text-xl font-semibold ${darkMode ? "text-white" : "text-slate-900"}`}>
+              Priority Actions
+            </h3>
+            <p className={`text-xs mt-0.5 ${darkMode ? "text-slate-400" : "text-slate-500"}`}>
+              Based on your conversation context
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className={`p-1 rounded transition-colors ${darkMode ? "text-slate-400 hover:bg-slate-700" : "text-slate-400 hover:bg-slate-100"}`}
+            aria-label="Close"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-6 space-y-4">
+          {loading && (
+            <div className="flex items-center justify-center py-12">
+              <span
+                className="inline-block w-2 h-2 rounded-full animate-pulse mr-3"
+                style={{ backgroundColor: CAPITA_COLORS.cyan }}
+              />
+              <span className={`text-sm ${darkMode ? "text-slate-200" : "text-slate-700"}`}>
+                Generating recommended actions…
+              </span>
+            </div>
+          )}
+          {!loading && error && (
+            <div className="text-sm text-red-500 px-2 py-3">{error}</div>
+          )}
+          {!loading && !error && actions && actions.length === 0 && (
+            <div className={`text-sm ${darkMode ? "text-slate-300" : "text-slate-700"}`}>
+              No urgent actions surfaced — current contract data looks healthy.
+            </div>
+          )}
+          {!loading && !error &&
+            (actions || []).map((action, idx) => {
+              const u = urgencyStyle(action.urgency, darkMode);
+              return (
+                <div
+                  key={`${action.action}-${idx}`}
+                  className="border rounded-lg p-4"
+                  style={{ borderColor: u.border, backgroundColor: u.bg }}
+                >
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: u.dot }} />
+                    <span
+                      className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded"
+                      style={{ color: u.dot, backgroundColor: `${u.dot}22` }}
+                    >
+                      {u.label}
+                    </span>
+                  </div>
+                  <p className={`text-sm font-medium leading-snug ${darkMode ? "text-white" : "text-slate-900"}`}>
+                    {action.action}
+                  </p>
+                  {action.rationale && (
+                    <p className={`text-xs mt-2 ${darkMode ? "text-slate-300" : "text-slate-700"}`}>
+                      {action.rationale}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap gap-3 mt-3 text-[11px]">
+                    {action.contract_ref && (
+                      <span className={darkMode ? "text-slate-400" : "text-slate-500"}>
+                        Clause: <span className={darkMode ? "text-slate-200" : "text-slate-700"}>{action.contract_ref}</span>
+                      </span>
+                    )}
+                    {action.owner_role && (
+                      <span className={darkMode ? "text-slate-400" : "text-slate-500"}>
+                        Owner: <span className={darkMode ? "text-slate-200" : "text-slate-700"}>{action.owner_role}</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type PriorityActionsWidgetProps = {
+  actions: NextBestAction[];
+  summary: Record<string, number>;
+  ruleCount: number;
+  loading: boolean;
+  darkMode: boolean;
+  onRefresh: () => void;
+};
+
+function PriorityActionsWidget({
+  actions,
+  summary,
+  ruleCount,
+  loading,
+  darkMode,
+  onRefresh,
+}: PriorityActionsWidgetProps) {
+  const [showAll, setShowAll] = useState(false);
+  const visible = showAll ? actions : actions.slice(0, 4);
+  const sumImmediate = summary["Immediate"] || 0;
+  const sumWeek = summary["This Week"] || 0;
+  const sumMonitor = summary["Monitor"] || 0;
+
+  return (
+    <div
+      className={`border rounded-xl p-6 mb-6 ${darkMode ? "bg-slate-800 border-slate-700" : "bg-white border-slate-200"}`}
+    >
+      <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center gap-2">
+          <Lightbulb className="w-5 h-5" style={{ color: CAPITA_COLORS.green }} />
+          <h3 className={`text-lg font-semibold ${darkMode ? "text-white" : "text-slate-900"}`}>
+            Priority Actions
+          </h3>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={loading}
+          className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 ${
+            darkMode ? "text-slate-300 hover:bg-slate-700" : "text-slate-600 hover:bg-slate-100"
+          }`}
+        >
+          <RotateCcw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+          {loading ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
+      <p className={`text-xs mb-4 ${darkMode ? "text-slate-400" : "text-slate-500"}`}>
+        Based on current contract data ({ruleCount} rule{ruleCount === 1 ? "" : "s"} matched)
+      </p>
+
+      <div className="flex flex-wrap gap-3 mb-4 text-xs">
+        <span
+          className="px-3 py-1 rounded-full font-medium"
+          style={{ color: "#E0566A", backgroundColor: "rgba(224,86,106,0.12)" }}
+        >
+          ● Immediate ({sumImmediate})
+        </span>
+        <span
+          className="px-3 py-1 rounded-full font-medium"
+          style={{ color: "#F59E0B", backgroundColor: "rgba(245,158,11,0.12)" }}
+        >
+          ● This Week ({sumWeek})
+        </span>
+        <span
+          className="px-3 py-1 rounded-full font-medium"
+          style={{ color: "#10A37F", backgroundColor: "rgba(16,214,166,0.12)" }}
+        >
+          ● Monitor ({sumMonitor})
+        </span>
+      </div>
+
+      {actions.length === 0 && !loading && (
+        <p className={`text-sm py-4 ${darkMode ? "text-slate-300" : "text-slate-600"}`}>
+          No actions surfaced — current contract data looks healthy.
+        </p>
+      )}
+
+      <div className="space-y-3">
+        {visible.map((a, i) => {
+          const u = urgencyStyle(a.urgency, darkMode);
+          return (
+            <div
+              key={`${a.action}-${i}`}
+              className="border rounded-lg p-3 flex gap-3"
+              style={{ borderColor: u.border, backgroundColor: u.bg }}
+            >
+              <span className="inline-block w-2 h-2 rounded-full mt-2 shrink-0" style={{ backgroundColor: u.dot }} />
+              <div className="flex-1">
+                <p className={`text-sm font-medium leading-snug ${darkMode ? "text-white" : "text-slate-900"}`}>
+                  {a.action}
+                </p>
+                <div className={`text-[11px] mt-1 ${darkMode ? "text-slate-400" : "text-slate-500"}`}>
+                  {a.contract_ref ? <>Clause: <span className={darkMode ? "text-slate-200" : "text-slate-700"}>{a.contract_ref}</span></> : null}
+                  {a.contract_ref && a.owner_role ? " · " : ""}
+                  {a.owner_role ? <>Owner: <span className={darkMode ? "text-slate-200" : "text-slate-700"}>{a.owner_role}</span></> : null}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {actions.length > 4 && (
+        <button
+          type="button"
+          onClick={() => setShowAll((v) => !v)}
+          className={`mt-3 text-xs underline ${darkMode ? "text-slate-300" : "text-slate-600"}`}
+        >
+          {showAll ? "Show less" : `Show all (${actions.length})`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<"chat" | "dashboard">("chat");
   const [darkMode, setDarkMode] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [sending, setSending] = useState(false);
-  const [showNextActions, setShowNextActions] = useState(false);
-
   const [personaName, setPersonaName] = useState("Adam");
   const [personaTitle, setPersonaTitle] = useState("");
 
@@ -202,6 +465,18 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [statusLabel, setStatusLabel] = useState<string | null>(null);
   const [statusElapsedMs, setStatusElapsedMs] = useState<number>(0);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [suggestionsRefreshing, setSuggestionsRefreshing] = useState(false);
+
+  const [nbaModalOpen, setNbaModalOpen] = useState(false);
+  const [nbaActions, setNbaActions] = useState<NextBestAction[] | null>(null);
+  const [nbaLoading, setNbaLoading] = useState(false);
+  const [nbaError, setNbaError] = useState<string | null>(null);
+
+  const [priorityActions, setPriorityActions] = useState<NextBestAction[]>([]);
+  const [prioritySummary, setPrioritySummary] = useState<Record<string, number>>({});
+  const [priorityLoading, setPriorityLoading] = useState(false);
+  const [priorityRuleCount, setPriorityRuleCount] = useState(0);
 
   // Typewriter animation: progressively reveal content of any message with `typing: true`.
   useEffect(() => {
@@ -246,7 +521,9 @@ export default function App() {
     // Rehydrate the latest conversation from Lakebase (if enabled server-side)
     fetchCurrentConversation()
       .then((c) => {
-        if (!c.enabled || !c.messages || c.messages.length === 0) return;
+        if (!c.enabled) return;
+        setConversationId(c.conversation_id);
+        if (!c.messages || c.messages.length === 0) return;
         setMessages(
           c.messages.map((m) => ({
             role: m.role,
@@ -255,6 +532,12 @@ export default function App() {
             elapsedMs: m.elapsed_ms ?? undefined,
           })),
         );
+        // Refresh suggestions to be contextual to the rehydrated thread
+        fetchContextualSuggestions(c.conversation_id || undefined)
+          .then((r) => {
+            if (r.items?.length) setSuggestions(r.items);
+          })
+          .catch(() => {});
       })
       .catch(() => {});
   }, []);
@@ -304,32 +587,41 @@ export default function App() {
           text,
           "supervisor",
           (e: ChatStreamEvent) => {
-          if (e.type === "start") {
-            setStatusLabel(`Routing to ${e.label}`);
-          } else if (e.type === "status") {
-            setStatusLabel(e.label);
-            setStatusElapsedMs(e.elapsed_ms);
-          } else if (e.type === "heartbeat") {
-            setStatusElapsedMs(e.elapsed_ms);
-          } else if (e.type === "answer") {
-            setMessages((m) => [
-              ...m,
-              {
-                role: "assistant",
-                content: "",
-                fullContent: e.answer,
-                typing: true,
-                followups: e.suggested_followups,
-                routed: e.routed_to || e.route || undefined,
-                elapsedMs: e.elapsed_ms,
-              },
-            ]);
-          } else if (e.type === "error") {
-            setMessages((m) => [
-              ...m,
-              { role: "assistant", content: `Sorry — ${e.message}` },
-            ]);
-          }
+            if (e.type === "start") {
+              setStatusLabel(`Routing to ${e.label}`);
+              if (e.conversation_id) setConversationId(e.conversation_id);
+            } else if (e.type === "status") {
+              setStatusLabel(e.label);
+              setStatusElapsedMs(e.elapsed_ms);
+            } else if (e.type === "heartbeat") {
+              if (typeof e.elapsed_ms === "number") setStatusElapsedMs(e.elapsed_ms);
+            } else if (e.type === "answer") {
+              setMessages((m) => [
+                ...m,
+                {
+                  role: "assistant",
+                  content: "",
+                  fullContent: e.answer,
+                  typing: true,
+                  followups: e.suggested_followups,
+                  routed: e.routed_to || e.route || undefined,
+                  elapsedMs: e.elapsed_ms,
+                },
+              ]);
+              if (e.conversation_id) setConversationId(e.conversation_id);
+            } else if (e.type === "suggestions") {
+              if (e.items?.length) setSuggestions(e.items);
+            } else if (e.type === "nba") {
+              setNbaActions(e.actions || []);
+              setNbaError(null);
+              setNbaLoading(false);
+              setNbaModalOpen(true);
+            } else if (e.type === "error") {
+              setMessages((m) => [
+                ...m,
+                { role: "assistant", content: `Sorry — ${e.message}` },
+              ]);
+            }
           },
           { history },
         );
@@ -351,45 +643,77 @@ export default function App() {
     void submitMessage(chatInput);
   }, [chatInput, submitMessage]);
 
-  const refreshSuggestions = () => {
-    fetchSuggestions()
-      .then((r) => setSuggestions(r.items || []))
-      .catch(() => {});
-  };
+  const refreshSuggestions = useCallback(async () => {
+    if (suggestionsRefreshing) return;
+    setSuggestionsRefreshing(true);
+    try {
+      const r = await fetchContextualSuggestions(conversationId || undefined);
+      if (r.items?.length) setSuggestions(r.items);
+    } catch {
+      try {
+        const r = await fetchSuggestions();
+        if (r.items?.length) setSuggestions(r.items);
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      setSuggestionsRefreshing(false);
+    }
+  }, [conversationId, suggestionsRefreshing]);
+
+  const openNbaFromConversation = useCallback(async () => {
+    setNbaError(null);
+    setNbaLoading(true);
+    setNbaActions(null);
+    setNbaModalOpen(true);
+    try {
+      const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+      const turns = messages
+        .filter((m) => m.content && !m.typing)
+        .slice(-8)
+        .map((m) => ({ role: m.role, content: m.fullContent || m.content }));
+      const r = await generateNba(turns, lastAssistant?.fullContent || lastAssistant?.content || "", conversationId);
+      setNbaActions(r.actions || []);
+    } catch (err) {
+      setNbaError(err instanceof Error ? err.message : "Failed to generate actions");
+    } finally {
+      setNbaLoading(false);
+    }
+  }, [messages, conversationId]);
+
+  const refreshPriorityActions = useCallback(async () => {
+    setPriorityLoading(true);
+    try {
+      const r = await fetchPriorityActions();
+      setPriorityActions(r.actions || []);
+      setPrioritySummary(r.summary || {});
+      setPriorityRuleCount(r.matched_rule_count || 0);
+    } catch {
+      /* ignore */
+    } finally {
+      setPriorityLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "dashboard" && priorityActions.length === 0 && !priorityLoading) {
+      void refreshPriorityActions();
+    }
+  }, [activeTab, priorityActions.length, priorityLoading, refreshPriorityActions]);
 
   const onNewThread = useCallback(async () => {
     if (sending) return;
     try {
-      await startNewConversation();
+      const r = await startNewConversation();
+      setConversationId(r.conversation_id);
     } catch {
-      /* fall through; clearing messages is a fine UX even if API fails */
+      setConversationId(null);
     }
     setMessages([]);
+    fetchSuggestions()
+      .then((r) => setSuggestions(r.items || []))
+      .catch(() => {});
   }, [sending]);
-
-  const chipColor = (i: number) =>
-    [CAPITA_COLORS.navyBlue, CAPITA_COLORS.cyan, CAPITA_COLORS.teal, CAPITA_COLORS.purple, CAPITA_COLORS.green][
-      i % 5
-    ];
-
-  const priorityActions = [
-    {
-      id: 1,
-      title: "Review underperforming suppliers",
-      description: "Two suppliers scored below 70 for 3 consecutive months",
-      urgency: "high" as const,
-      impact: "Contract penalties may apply if not addressed by end of quarter",
-      dueDate: "Next 7 days",
-    },
-    {
-      id: 2,
-      title: "Address SLA compliance drop",
-      description: "Overall compliance decreased from 93% to 88% in last 3 months",
-      urgency: "high" as const,
-      impact: "Trend indicates potential breach of contractual obligations",
-      dueDate: "Next 14 days",
-    },
-  ];
 
   const starterChips = suggestions.slice(0, 5);
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
@@ -458,24 +782,107 @@ export default function App() {
       </div>
 
       {activeTab === "chat" ? (
-        <div className="flex-1 flex flex-col min-h-0 relative">
-          <div className={`px-6 py-4 shrink-0 ${darkMode ? "bg-slate-800/80" : "bg-white border-b border-slate-200"}`}>
-            <div className={`text-sm mb-1 ${darkMode ? "text-slate-400" : "text-slate-500"}`}>
-              {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
+        <div className="flex-1 flex min-h-0 relative">
+          {/* Left panel — greeting + suggestion cards */}
+          <aside
+            className={`hidden md:flex w-[360px] shrink-0 border-r flex-col ${
+              darkMode ? "bg-slate-900 border-slate-700" : "bg-white border-slate-200"
+            }`}
+          >
+            <div className="px-6 pt-6 pb-4 shrink-0">
+              <div className={`text-xs mb-1 ${darkMode ? "text-slate-400" : "text-slate-500"}`}>
+                {new Date().toLocaleString(undefined, {
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric",
+                  year: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </div>
+              <h2 className={`text-2xl font-semibold mb-1 ${darkMode ? "text-white" : "text-slate-900"}`}>
+                Good morning, {personaName}
+              </h2>
+              <p className={`text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>
+                Your most likely questions based on recent patterns:
+              </p>
             </div>
-            <h2 className={`text-2xl font-semibold mb-1 ${darkMode ? "text-white" : "text-slate-900"}`}>
-              Good morning, {personaName}
-            </h2>
-            <p className={`text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>
-              {personaTitle || "TfL contract intelligence"} — click a suggestion or ask anything.
-            </p>
-          </div>
 
+            <div className="flex-1 overflow-auto px-6 pb-4 space-y-3 min-h-0">
+              {(starterChips.length
+                ? starterChips
+                : followupChips.map((q) => ({ question: q, category: lastAssistant?.routed || "Insights" }))
+              ).map((chip, i) => {
+                const color = categoryColor(chip.category);
+                return (
+                  <button
+                    type="button"
+                    key={`${chip.question}-${i}`}
+                    onClick={() => void submitMessage(chip.question)}
+                    disabled={sending}
+                    className={`w-full text-left rounded-xl border p-4 transition-all hover:shadow-md disabled:opacity-50 ${
+                      darkMode ? "bg-slate-800 border-slate-700 hover:bg-slate-750" : "bg-white border-slate-200 hover:bg-slate-50"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <span
+                        className="text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded text-white"
+                        style={{ backgroundColor: color }}
+                      >
+                        {chip.category || "Insights"}
+                      </span>
+                      <span
+                        className="h-[2px] w-10 rounded"
+                        style={{ backgroundColor: `${color}55` }}
+                      />
+                    </div>
+                    <p className={`text-sm leading-snug ${darkMode ? "text-slate-100" : "text-slate-800"}`}>
+                      {chip.question}
+                    </p>
+                  </button>
+                );
+              })}
+              {!starterChips.length && !followupChips.length && (
+                <p className={`text-xs ${darkMode ? "text-slate-500" : "text-slate-500"}`}>
+                  No suggestions yet — try the refresh button.
+                </p>
+              )}
+            </div>
+
+            <div className={`px-6 py-4 border-t shrink-0 ${darkMode ? "border-slate-700" : "border-slate-200"}`}>
+              <button
+                type="button"
+                onClick={() => void refreshSuggestions()}
+                disabled={suggestionsRefreshing}
+                className={`w-full flex items-center justify-center gap-2 text-xs font-medium py-2 rounded-lg transition-colors disabled:opacity-50 ${
+                  darkMode ? "text-slate-300 hover:bg-slate-800" : "text-slate-600 hover:bg-slate-100"
+                }`}
+              >
+                <RotateCcw className={`w-3.5 h-3.5 ${suggestionsRefreshing ? "animate-spin" : ""}`} />
+                {suggestionsRefreshing ? "Refreshing…" : "Refresh suggestions"}
+              </button>
+            </div>
+          </aside>
+
+          {/* Right panel — chat */}
+          <div className="flex-1 flex flex-col min-h-0 relative">
           <div className="flex-1 overflow-auto p-6 space-y-4 min-h-0">
             {messages.length === 0 && (
-              <p className={`text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>
-                Start from a suggested question below, or type your own.
-              </p>
+              <div className="flex justify-start">
+                <div
+                  className="max-w-3xl rounded-lg p-4 border"
+                  style={{
+                    backgroundColor: darkMode ? "rgba(0,163,224,0.08)" : "rgba(0,163,224,0.06)",
+                    borderColor: darkMode ? "rgba(0,163,224,0.30)" : "rgba(0,163,224,0.25)",
+                    color: darkMode ? "#e2e8f0" : "#0f172a",
+                  }}
+                >
+                  <p className="text-sm">
+                    Good morning, {personaName}. I'm here to help you track the TfL contract performance.
+                    Click any question on the left or ask me anything.
+                  </p>
+                </div>
+              </div>
             )}
             {messages.map((msg, idx) => {
               const isUser = msg.role === "user";
@@ -548,29 +955,6 @@ export default function App() {
           </div>
 
           <div className={`border-t p-4 shrink-0 space-y-3 ${darkMode ? "border-slate-700 bg-slate-800" : "border-slate-200 bg-white"}`}>
-            <div className="flex flex-wrap gap-2">
-              {(followupChips.length ? followupChips : starterChips.map((s) => s.question)).map((q, i) => (
-                <button
-                  type="button"
-                  key={`${q}-${i}`}
-                  onClick={() => void submitMessage(q)}
-                  className={`text-left text-xs px-3 py-2 rounded-full border max-w-full transition-colors ${
-                    darkMode ? "border-slate-600 text-slate-200 hover:bg-slate-700" : "border-slate-200 text-slate-700 hover:bg-slate-50"
-                  }`}
-                  style={{ borderColor: chipColor(i) }}
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={refreshSuggestions}
-              className={`text-xs underline ${darkMode ? "text-slate-500" : "text-slate-600"}`}
-            >
-              Refresh suggestions
-            </button>
-
             <div className="flex gap-3">
               <input
                 type="text"
@@ -597,8 +981,10 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() => setShowNextActions(true)}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg transition-colors border"
+              onClick={() => void openNbaFromConversation()}
+              disabled={messages.length === 0 || nbaLoading}
+              title={messages.length === 0 ? "Ask a question first to generate actions" : "Generate next best actions from this conversation"}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg transition-colors border disabled:opacity-50 disabled:cursor-not-allowed"
               style={{
                 backgroundColor: `${CAPITA_COLORS.green}${darkMode ? "33" : "1A"}`,
                 color: darkMode ? CAPITA_COLORS.green : "#8B9600",
@@ -606,29 +992,21 @@ export default function App() {
               }}
             >
               <Lightbulb className="w-4 h-4" />
-              <span className="text-sm font-medium">Suggest next best actions (preview)</span>
+              <span className="text-sm font-medium">
+                {nbaLoading ? "Generating actions…" : "Suggest next best actions based on this conversation"}
+              </span>
             </button>
           </div>
+          </div>
 
-          {showNextActions && (
-            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6">
-              <div className={`rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-auto ${darkMode ? "bg-slate-800" : "bg-white"}`}>
-                <div className={`sticky top-0 border-b p-6 flex justify-between ${darkMode ? "border-slate-700" : "border-slate-200"}`}>
-                  <h3 className={`text-xl font-semibold ${darkMode ? "text-white" : "text-slate-900"}`}>Recommended Next Actions</h3>
-                  <button type="button" onClick={() => setShowNextActions(false)} className="text-slate-400 hover:text-slate-600">
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-                <div className="p-6 space-y-4">
-                  {priorityActions.map((action) => (
-                    <div key={action.id} className={`border rounded-lg p-4 ${darkMode ? "border-slate-700" : "border-slate-200"}`}>
-                      <h4 className={`font-semibold ${darkMode ? "text-white" : "text-slate-900"}`}>{action.title}</h4>
-                      <p className={`text-sm mt-2 ${darkMode ? "text-slate-300" : "text-slate-700"}`}>{action.description}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+          {nbaModalOpen && (
+            <NBAModal
+              actions={nbaActions}
+              loading={nbaLoading}
+              error={nbaError}
+              darkMode={darkMode}
+              onClose={() => setNbaModalOpen(false)}
+            />
           )}
         </div>
       ) : (
@@ -637,6 +1015,15 @@ export default function App() {
             <h2 className={`text-3xl font-semibold mb-2 ${darkMode ? "text-white" : "text-slate-900"}`}>TfL Contract Overview</h2>
             <p className={`text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>Live KPIs from Unity Catalog</p>
           </div>
+
+          <PriorityActionsWidget
+            actions={priorityActions}
+            summary={prioritySummary}
+            ruleCount={priorityRuleCount}
+            loading={priorityLoading}
+            darkMode={darkMode}
+            onRefresh={() => void refreshPriorityActions()}
+          />
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mb-8">
             {kpis.map((kpi) => {

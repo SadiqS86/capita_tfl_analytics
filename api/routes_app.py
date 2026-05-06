@@ -13,11 +13,23 @@ from fastapi import APIRouter, BackgroundTasks
 from fastapi.responses import StreamingResponse
 
 import db
+from agents.action_rules_agent import ActionRulesAgent
 from agents.genie_agent import GenieAgent
 from agents.leader_profile_agent import LeaderProfileAgent
+from agents.nba_agent import NBAAgent
 from agents.rag_agent import RAGAgent
+from agents.suggestion_generator import SuggestionGenerator
 from agents.supervisor_endpoint_agent import SupervisorEndpointAgent
-from api.schemas import BootstrapResponse, ChatRequest, ChatResponse, KPIValue
+from api.schemas import (
+    BootstrapResponse,
+    ChatRequest,
+    ChatResponse,
+    KPIValue,
+    NBARequest,
+    NBAResponse,
+    NextBestAction,
+    PriorityActionsResponse,
+)
 from api.workspace_client import get_workspace_client
 from config import UC_CONFIG
 from dbx_sql import fetch_all
@@ -63,6 +75,32 @@ def _sse(event: str, data: dict[str, Any]) -> bytes:
 
 def _warehouse_id() -> str:
     return (os.environ.get("DATABRICKS_WAREHOUSE_ID") or "").strip()
+
+
+_NBA_INTENT_PATTERNS = (
+    "what should i do",
+    "what should we do",
+    "what do i do",
+    "what are my next steps",
+    "what are the next steps",
+    "what action should i take",
+    "what actions should i take",
+    "next best action",
+    "next best actions",
+    "how should i respond",
+    "how do i respond",
+    "what do you recommend",
+    "what would you recommend",
+    "give me actions",
+    "recommend actions",
+)
+
+
+def _is_nba_intent(message: str) -> bool:
+    if not message:
+        return False
+    t = message.lower().strip()
+    return any(p in t for p in _NBA_INTENT_PATTERNS)
 
 
 def _suggested_followups(user_question: str, n: int = 3) -> list[str]:
@@ -138,6 +176,95 @@ def suggestions() -> dict[str, Any]:
     lp = LeaderProfileAgent(UC_CONFIG, warehouse_id=_warehouse_id() or None)
     rows = lp.get_top_questions(5)
     return {"items": rows}
+
+
+@router.get("/suggestions/contextual")
+def contextual_suggestions(conversation_id: str | None = None) -> dict[str, Any]:
+    """Generate fresh follow-up questions based on the latest conversation.
+
+    Falls back to seeded suggestions when no conversation exists yet.
+    """
+    history: list[dict[str, str]] = []
+    if conversation_id and db.is_enabled():
+        try:
+            history = db.recent_history(conversation_id, max_turns=8)
+        except Exception:
+            history = []
+    elif db.is_enabled():
+        try:
+            cid = db.latest_conversation_id(DEMO_USER_ID, UC_CONFIG.use_case_id)
+            if cid:
+                history = db.recent_history(cid, max_turns=8)
+        except Exception:
+            history = []
+
+    if not history:
+        lp = LeaderProfileAgent(UC_CONFIG, warehouse_id=_warehouse_id() or None)
+        return {"items": lp.get_top_questions(5), "source": "seed"}
+
+    items = SuggestionGenerator(UC_CONFIG).generate(history, n=5)
+    if not items:
+        lp = LeaderProfileAgent(UC_CONFIG, warehouse_id=_warehouse_id() or None)
+        return {"items": lp.get_top_questions(5), "source": "fallback"}
+    return {"items": items, "source": "contextual"}
+
+
+@router.post("/nba", response_model=NBAResponse)
+def generate_nba(body: NBARequest) -> NBAResponse:
+    """Generate Next Best Actions from a conversation context (chat popup)."""
+    history = [t.model_dump() for t in body.history]
+    if not history and not body.answer.strip():
+        return NBAResponse(actions=[], matched_rule_count=0, data_context={})
+
+    last_assistant = body.answer.strip()
+    if not last_assistant:
+        for turn in reversed(history):
+            if turn.get("role") == "assistant" and turn.get("content"):
+                last_assistant = str(turn["content"])
+                break
+    if not last_assistant and history:
+        last_assistant = str(history[-1].get("content") or "")
+
+    nba = NBAAgent(UC_CONFIG)
+    out = nba.generate(answer_text=last_assistant or "", conversation=history)
+    return NBAResponse(
+        actions=[NextBestAction(**a) for a in out.get("actions", [])],
+        matched_rule_count=int(out.get("matched_rule_count", 0)),
+        data_context=out.get("data_context") or {},
+    )
+
+
+@router.get("/priority-actions", response_model=PriorityActionsResponse)
+def priority_actions() -> PriorityActionsResponse:
+    """Dashboard widget — purely data-driven actions evaluated against live KPIs."""
+    rules = ActionRulesAgent(UC_CONFIG, warehouse_id=_warehouse_id() or None)
+    metrics, matched = rules.evaluate_live_kpis()
+
+    actions: list[NextBestAction] = []
+    for r in matched:
+        actions.append(
+            NextBestAction(
+                action=str(r.get("action_text") or ""),
+                urgency=str(r.get("urgency") or "Monitor"),
+                rationale=(
+                    f"Rule triggered: {r.get('trigger_metric')} {r.get('trigger_condition')} "
+                    f"(current: {metrics.get(r.get('trigger_metric'))})"
+                ),
+                owner_role=str(r.get("owner_role") or ""),
+                contract_ref=str(r.get("contract_ref") or ""),
+            )
+        )
+
+    summary = {"Immediate": 0, "This Week": 0, "Monitor": 0}
+    for a in actions:
+        summary[a.urgency] = summary.get(a.urgency, 0) + 1
+
+    return PriorityActionsResponse(
+        actions=actions,
+        summary=summary,
+        metrics=metrics,
+        matched_rule_count=len(matched),
+    )
 
 
 @router.get("/kpis", response_model=list[KPIValue])
@@ -293,6 +420,7 @@ async def chat_stream(body: ChatRequest, background_tasks: BackgroundTasks) -> S
     msg = body.message.strip()
     mode = body.mode
     followups = _suggested_followups(msg)
+    nba_intent = mode == "supervisor" and _is_nba_intent(msg)
 
     if mode == "genie":
         route = "genie"
@@ -320,11 +448,88 @@ async def chat_stream(body: ChatRequest, background_tasks: BackgroundTasks) -> S
                 "route": route,
                 "label": _ROUTE_LABELS.get(route, route),
                 "conversation_id": conv_id,
+                "nba_intent": nba_intent,
             },
         )
         await asyncio.sleep(0)
 
         loop = asyncio.get_event_loop()
+
+        # ---- NBA intent path: skip the supervisor, generate actions only ----
+        if nba_intent:
+            yield _sse("status", {"label": "Generating next best actions…", "elapsed_ms": 0})
+            started_at = time.time()
+            nba = NBAAgent(UC_CONFIG)
+
+            def _gen_nba() -> dict[str, Any]:
+                # Build a synthesised "answer summary" from the last assistant turn so the
+                # NBA agent has fresh context for clause grounding.
+                last_assistant = ""
+                for turn in reversed(history):
+                    if turn.get("role") == "assistant" and turn.get("content"):
+                        last_assistant = str(turn["content"])[:2000]
+                        break
+                return nba.generate(
+                    answer_text=last_assistant or msg,
+                    conversation=history + [{"role": "user", "content": msg}],
+                )
+
+            nba_future = loop.run_in_executor(None, _gen_nba)
+            while not nba_future.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(nba_future), timeout=0.5)
+                except asyncio.TimeoutError:
+                    yield _sse(
+                        "heartbeat",
+                        {"elapsed_ms": int((time.time() - started_at) * 1000), "phase": "nba"},
+                    )
+
+            try:
+                nba_out = nba_future.result()
+            except Exception as exc:
+                yield _sse("error", {"message": f"NBA generation failed: {exc}"})
+                yield _sse("done", {})
+                return
+
+            elapsed_ms = int((time.time() - started_at) * 1000)
+            short_answer = (
+                "Here are the recommended next actions based on this conversation."
+                if nba_out.get("actions")
+                else "No immediate actions are required — current data is healthy."
+            )
+            answer_payload = {
+                "answer": short_answer,
+                "routed_to": "Next Best Actions",
+                "route": "nba",
+                "sql": None,
+                "sources": [],
+                "suggested_followups": followups,
+                "elapsed_ms": elapsed_ms,
+                "conversation_id": conv_id,
+            }
+            yield _sse("answer", answer_payload)
+            yield _sse(
+                "nba",
+                {
+                    "actions": nba_out.get("actions", []),
+                    "matched_rule_count": nba_out.get("matched_rule_count", 0),
+                    "data_context": nba_out.get("data_context", {}),
+                },
+            )
+            if conv_id:
+                try:
+                    db.append_message(
+                        conv_id,
+                        "assistant",
+                        short_answer,
+                        routed_to="Next Best Actions",
+                        sql_text=None,
+                        elapsed_ms=elapsed_ms,
+                    )
+                except Exception as exc:
+                    print(f"[chat/stream] db.persist nba msg failed: {exc}")
+            yield _sse("done", {})
+            return
 
         def _run() -> dict[str, Any]:
             if route == "genie":
@@ -384,6 +589,27 @@ async def chat_stream(body: ChatRequest, background_tasks: BackgroundTasks) -> S
             except Exception as exc:
                 print(f"[chat/stream] db.persist assistant msg failed: {exc}")
         yield _sse("answer", payload)
+
+        # Generate contextual follow-ups using a fast foundation model.
+        # Built from the just-completed turn (user + assistant) so the LLM has fresh context.
+        followup_history = list(history) + [
+            {"role": "user", "content": msg},
+            {"role": "assistant", "content": answer_text},
+        ]
+        try:
+            sgen = SuggestionGenerator(UC_CONFIG)
+            sug_future = loop.run_in_executor(None, lambda: sgen.generate(followup_history, n=5))
+            while not sug_future.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(sug_future), timeout=0.5)
+                except asyncio.TimeoutError:
+                    yield _sse("heartbeat", {"phase": "suggestions"})
+            sug_items = sug_future.result() or []
+            if sug_items:
+                yield _sse("suggestions", {"items": sug_items})
+        except Exception as exc:
+            print(f"[chat/stream] suggestion gen failed: {exc}")
+
         yield _sse("done", {})
 
     return StreamingResponse(

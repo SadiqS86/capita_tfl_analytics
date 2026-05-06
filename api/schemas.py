@@ -39,3 +39,34 @@ class BootstrapResponse(BaseModel):
     persona_title: str
     domain_summary: str
     use_case_id: str
+
+
+class NextBestAction(BaseModel):
+    action: str
+    urgency: Literal["Immediate", "This Week", "Monitor"]
+    rationale: str = ""
+    owner_role: str = ""
+    contract_ref: str = ""
+
+
+class NBARequest(BaseModel):
+    """Body for `POST /api/nba` — full conversation context for chat-popup NBA."""
+
+    history: list[ChatTurn] = Field(default_factory=list)
+    answer: str = Field(default="", description="Most recent assistant answer (optional)")
+    conversation_id: str | None = None
+
+
+class NBAResponse(BaseModel):
+    actions: list[NextBestAction] = Field(default_factory=list)
+    matched_rule_count: int = 0
+    data_context: dict[str, Any] = Field(default_factory=dict)
+
+
+class PriorityActionsResponse(BaseModel):
+    """Response for `GET /api/priority-actions` — dashboard data-driven actions."""
+
+    actions: list[NextBestAction] = Field(default_factory=list)
+    summary: dict[str, int] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    matched_rule_count: int = 0
