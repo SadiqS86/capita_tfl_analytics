@@ -2,22 +2,52 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import time
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
 from fastapi import APIRouter, BackgroundTasks
+from fastapi.responses import StreamingResponse
 
 from agents.genie_agent import GenieAgent
 from agents.leader_profile_agent import LeaderProfileAgent
 from agents.rag_agent import RAGAgent
-from agents.supervisor import SupervisorAgent
+from agents.supervisor import SupervisorAgent, classify_route
 from api.schemas import BootstrapResponse, ChatRequest, ChatResponse, KPIValue
 from api.workspace_client import get_workspace_client
 from config import UC_CONFIG
 from dbx_sql import fetch_all
 
 router = APIRouter()
+
+
+_ROUTE_LABELS = {
+    "genie": "Genie (operational data)",
+    "rag": "Knowledge Assistant (contracts)",
+}
+
+_STAGE_MESSAGES = {
+    "genie": [
+        (0.0, "Routing to Genie…"),
+        (0.5, "Generating SQL with Genie…"),
+        (3.0, "Running query on warehouse…"),
+        (8.0, "Analysing results…"),
+        (15.0, "Still working — large result sets can take a moment…"),
+    ],
+    "rag": [
+        (0.0, "Routing to Knowledge Assistant…"),
+        (0.5, "Searching contract documents…"),
+        (3.0, "Synthesising answer…"),
+        (10.0, "Still working — long contracts take a moment…"),
+    ],
+}
+
+
+def _sse(event: str, data: dict[str, Any]) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
 
 
 def _warehouse_id() -> str:
@@ -202,4 +232,85 @@ def chat_endpoint(body: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         suggested_followups=followups,
         sql=r.get("sql"),
         sources=r.get("sources"),
+    )
+
+
+@router.post("/chat/stream")
+async def chat_stream(body: ChatRequest, background_tasks: BackgroundTasks) -> StreamingResponse:
+    """Server-Sent Events: emit route, progressive status, then final answer.
+
+    Does not stream LLM tokens (Genie/KA are not token-stream APIs), but gives
+    the user near-instant visibility into what the system is doing — large
+    perceived latency improvement over a single blocking POST /chat.
+    """
+    background_tasks.add_task(_log_question_task, body.message)
+
+    msg = body.message.strip()
+    mode = body.mode
+    followups = _suggested_followups(msg)
+
+    if mode == "genie":
+        route = "genie"
+    elif mode == "rag":
+        route = "rag"
+    else:
+        route = classify_route(msg)
+
+    async def event_stream():
+        yield _sse("start", {"message": msg, "route": route, "label": _ROUTE_LABELS.get(route, route)})
+        await asyncio.sleep(0)
+
+        loop = asyncio.get_event_loop()
+
+        def _run() -> dict[str, Any]:
+            if route == "genie":
+                return GenieAgent(UC_CONFIG).query(msg)
+            return RAGAgent(UC_CONFIG).query(msg)
+
+        worker = loop.run_in_executor(None, _run)
+
+        started_at = time.time()
+        stages = list(_STAGE_MESSAGES.get(route, [(0.0, "Working…")]))
+        next_stage_idx = 0
+
+        while not worker.done():
+            elapsed = time.time() - started_at
+
+            while next_stage_idx < len(stages) and stages[next_stage_idx][0] <= elapsed:
+                _, label = stages[next_stage_idx]
+                yield _sse("status", {"label": label, "elapsed_ms": int(elapsed * 1000)})
+                next_stage_idx += 1
+
+            try:
+                await asyncio.wait_for(asyncio.shield(worker), timeout=0.5)
+            except asyncio.TimeoutError:
+                yield _sse("heartbeat", {"elapsed_ms": int(elapsed * 1000)})
+
+        try:
+            result = worker.result()
+        except Exception as exc:
+            yield _sse("error", {"message": str(exc)})
+            yield _sse("done", {})
+            return
+
+        payload = {
+            "answer": str(result.get("answer") or ""),
+            "routed_to": result.get("agent") or _ROUTE_LABELS.get(route, route),
+            "route": route,
+            "sql": result.get("sql"),
+            "sources": result.get("sources") or [],
+            "suggested_followups": followups,
+            "elapsed_ms": int((time.time() - started_at) * 1000),
+        }
+        yield _sse("answer", payload)
+        yield _sse("done", {})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )

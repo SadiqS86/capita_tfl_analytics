@@ -28,3 +28,5 @@ targets:
                 value: ss_kibbim_azure_stable
               - name: UC_SCHEMA
                 value: capita_tfl_demo
+              - name: DATABRICKS_WAREHOUSE_ID
+                value: c184130100ab98c7

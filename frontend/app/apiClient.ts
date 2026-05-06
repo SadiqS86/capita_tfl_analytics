@@ -66,3 +66,78 @@ export async function sendChatMessage(message: string, mode: "supervisor" | "gen
     sql?: string | null;
   }>(res);
 }
+
+export type ChatStreamEvent =
+  | { type: "start"; route: string; label: string }
+  | { type: "status"; label: string; elapsed_ms: number }
+  | { type: "heartbeat"; elapsed_ms: number }
+  | {
+      type: "answer";
+      answer: string;
+      routed_to: string | null;
+      route: string | null;
+      sql?: string | null;
+      sources?: { document?: string; page?: number | null; url?: string }[];
+      suggested_followups: string[];
+      elapsed_ms: number;
+    }
+  | { type: "error"; message: string }
+  | { type: "done" };
+
+/**
+ * Open an SSE chat stream. Calls `onEvent` for each parsed event.
+ * Returns a promise that resolves when the stream ends (after `done` or error).
+ *
+ * Uses `fetch` + ReadableStream rather than EventSource because EventSource
+ * doesn't support POST with a JSON body.
+ */
+export async function streamChat(
+  message: string,
+  mode: "supervisor" | "genie" | "rag",
+  onEvent: (e: ChatStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch("/api/chat/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify({ message, mode }),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(text || `Stream failed: ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  const flush = (raw: string) => {
+    let evt = "message";
+    let data = "";
+    for (const line of raw.split("\n")) {
+      if (line.startsWith("event:")) evt = line.slice(6).trim();
+      else if (line.startsWith("data:")) data += (data ? "\n" : "") + line.slice(5).trim();
+    }
+    if (!data) return;
+    try {
+      const parsed = JSON.parse(data);
+      onEvent({ type: evt as ChatStreamEvent["type"], ...parsed } as ChatStreamEvent);
+    } catch {
+      /* ignore malformed chunk */
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sep: number;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const raw = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      if (raw.trim()) flush(raw);
+    }
+  }
+  if (buffer.trim()) flush(buffer);
+}

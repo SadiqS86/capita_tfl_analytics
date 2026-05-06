@@ -1,4 +1,4 @@
 node_modules
-dist
+# dist intentionally tracked so Databricks bundle deploy uploads the built SPA
 *.local
 .DS_Store

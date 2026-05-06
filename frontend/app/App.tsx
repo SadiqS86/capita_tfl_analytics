@@ -7,7 +7,8 @@ import {
   fetchDashboardCharts,
   fetchKpis,
   fetchSuggestions,
-  sendChatMessage,
+  streamChat,
+  type ChatStreamEvent,
   type KPIPayload,
   type SuggestionItem,
 } from "./apiClient";
@@ -50,8 +51,10 @@ export default function App() {
 
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   const [messages, setMessages] = useState<
-    { role: "user" | "assistant"; content: string; followups?: string[]; routed?: string }[]
+    { role: "user" | "assistant"; content: string; followups?: string[]; routed?: string; elapsedMs?: number }[]
   >([]);
+  const [statusLabel, setStatusLabel] = useState<string | null>(null);
+  const [statusElapsedMs, setStatusElapsedMs] = useState<number>(0);
 
   const [kpis, setKpis] = useState<KPIPayload[]>([]);
   const [complianceSeries, setComplianceSeries] = useState<{ month: string; compliance: number }[]>([]);
@@ -97,25 +100,46 @@ export default function App() {
       if (!text || sending) return;
       setChatInput("");
       setSending(true);
+      setStatusLabel("Routing question…");
+      setStatusElapsedMs(0);
       setMessages((m) => [...m, { role: "user", content: text }]);
+
       try {
-        const res = await sendChatMessage(text, "supervisor");
+        await streamChat(text, "supervisor", (e: ChatStreamEvent) => {
+          if (e.type === "start") {
+            setStatusLabel(`Routing to ${e.label}`);
+          } else if (e.type === "status") {
+            setStatusLabel(e.label);
+            setStatusElapsedMs(e.elapsed_ms);
+          } else if (e.type === "heartbeat") {
+            setStatusElapsedMs(e.elapsed_ms);
+          } else if (e.type === "answer") {
+            setMessages((m) => [
+              ...m,
+              {
+                role: "assistant",
+                content: e.answer,
+                followups: e.suggested_followups,
+                routed: e.routed_to || e.route || undefined,
+                elapsedMs: e.elapsed_ms,
+              },
+            ]);
+          } else if (e.type === "error") {
+            setMessages((m) => [
+              ...m,
+              { role: "assistant", content: `Sorry — ${e.message}` },
+            ]);
+          }
+        });
+      } catch (err) {
         setMessages((m) => [
           ...m,
-          {
-            role: "assistant",
-            content: res.answer,
-            followups: res.suggested_followups,
-            routed: res.routed_to || res.route || undefined,
-          },
-        ]);
-      } catch (e) {
-        setMessages((m) => [
-          ...m,
-          { role: "assistant", content: `Sorry — could not reach the API (${String(e)}).` },
+          { role: "assistant", content: `Sorry — could not reach the API (${String(err)}).` },
         ]);
       } finally {
         setSending(false);
+        setStatusLabel(null);
+        setStatusElapsedMs(0);
       }
     },
     [sending],
@@ -240,14 +264,37 @@ export default function App() {
                   <p className={`text-sm ${msg.role === "user" ? "text-white" : darkMode ? "text-slate-200" : "text-slate-800"}`}>
                     {msg.content}
                   </p>
-                  {msg.role === "assistant" && msg.routed && (
-                    <p className={`text-xs mt-2 ${darkMode ? "text-slate-500" : "text-slate-500"}`}>Routed: {msg.routed}</p>
+                  {msg.role === "assistant" && (msg.routed || msg.elapsedMs != null) && (
+                    <p className={`text-xs mt-2 ${darkMode ? "text-slate-500" : "text-slate-500"}`}>
+                      {msg.routed ? `Routed: ${msg.routed}` : ""}
+                      {msg.routed && msg.elapsedMs != null ? " · " : ""}
+                      {msg.elapsedMs != null ? `${(msg.elapsedMs / 1000).toFixed(1)}s` : ""}
+                    </p>
                   )}
                 </div>
               </div>
             ))}
             {sending && (
-              <div className={`text-sm ${darkMode ? "text-slate-400" : "text-slate-600"}`}>Thinking…</div>
+              <div className="flex justify-start">
+                <div
+                  className={`max-w-3xl rounded-lg px-4 py-3 flex items-center gap-3 ${
+                    darkMode ? "bg-slate-800 border border-slate-700" : "bg-white border border-slate-200"
+                  }`}
+                >
+                  <span
+                    className="inline-block w-2 h-2 rounded-full animate-pulse"
+                    style={{ backgroundColor: CAPITA_COLORS.cyan }}
+                  />
+                  <span className={`text-sm ${darkMode ? "text-slate-200" : "text-slate-700"}`}>
+                    {statusLabel || "Thinking…"}
+                  </span>
+                  {statusElapsedMs > 1000 && (
+                    <span className={`text-xs ${darkMode ? "text-slate-500" : "text-slate-500"}`}>
+                      {(statusElapsedMs / 1000).toFixed(1)}s
+                    </span>
+                  )}
+                </div>
+              </div>
             )}
           </div>
 
