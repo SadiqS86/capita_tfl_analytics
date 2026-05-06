@@ -1731,6 +1731,61 @@ export default function App() {
             )}
           </div>
 
+          {/* Sticky suggestions bar — always visible above input */}
+          {(starterChips.length > 0 || followupChips.length > 0) && (
+            <div className={`border-t px-4 py-3 shrink-0 ${darkMode ? "border-slate-700 bg-slate-800/80" : "border-slate-200 bg-white/90"}`}>
+              <div className="flex items-center gap-2 mb-2">
+                <Lightbulb className={`w-3.5 h-3.5 ${darkMode ? "text-slate-400" : "text-slate-500"}`} />
+                <span className={`text-xs font-medium ${darkMode ? "text-slate-400" : "text-slate-500"}`}>
+                  Suggested questions
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void refreshSuggestions()}
+                  disabled={suggestionsRefreshing}
+                  className={`ml-auto p-1 rounded transition-colors disabled:opacity-50 ${
+                    darkMode ? "hover:bg-slate-700 text-slate-400" : "hover:bg-slate-100 text-slate-500"
+                  }`}
+                  title="Refresh suggestions"
+                >
+                  <RotateCcw className={`w-3.5 h-3.5 ${suggestionsRefreshing ? "animate-spin" : ""}`} />
+                </button>
+              </div>
+              <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+                {(starterChips.length
+                  ? starterChips
+                  : followupChips.map((q) => ({ question: q, category: lastAssistant?.routed || "Insights" }))
+                ).slice(0, 5).map((chip, i) => {
+                  const color = categoryColor(chip.category);
+                  return (
+                    <button
+                      type="button"
+                      key={`sticky-${chip.question}-${i}`}
+                      onClick={() => {
+                        setLastClickedCategory(chip.category || null);
+                        void submitMessage(chip.question, { preferredCategory: chip.category || null });
+                      }}
+                      disabled={sending}
+                      className={`flex-shrink-0 max-w-[280px] text-left rounded-lg border px-3 py-2 transition-all hover:shadow disabled:opacity-50 ${
+                        darkMode ? "bg-slate-700 border-slate-600 hover:bg-slate-650" : "bg-slate-50 border-slate-200 hover:bg-white"
+                      }`}
+                    >
+                      <span
+                        className="inline-block text-[9px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded text-white mb-1"
+                        style={{ backgroundColor: color }}
+                      >
+                        {chip.category || "Insights"}
+                      </span>
+                      <p className={`text-xs leading-snug line-clamp-2 ${darkMode ? "text-slate-200" : "text-slate-700"}`}>
+                        {chip.question}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div className={`border-t p-4 shrink-0 space-y-3 ${darkMode ? "border-slate-700 bg-slate-800" : "border-slate-200 bg-white"}`}>
             <div className="flex gap-3">
               <input
