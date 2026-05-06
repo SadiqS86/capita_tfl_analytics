@@ -50,5 +50,6 @@ targets:
               - name: APP_LOGO_URL
                 value: /logo.png
               # Optional separate dark-mode logo (falls back to APP_LOGO_URL if unset).
-              - name: APP_LOGO_URL_DARK
-                value: ""
+              # Set to a path / URL when you have a dark-friendly variant; otherwise leave commented.
+              # - name: APP_LOGO_URL_DARK
+              #   value: /logo-dark.png
