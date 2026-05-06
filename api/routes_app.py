@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from agents.genie_agent import GenieAgent
 from agents.leader_profile_agent import LeaderProfileAgent
 from agents.rag_agent import RAGAgent
-from agents.supervisor import SupervisorAgent, classify_route
+from agents.supervisor_endpoint_agent import SupervisorEndpointAgent
 from api.schemas import BootstrapResponse, ChatRequest, ChatResponse, KPIValue
 from api.workspace_client import get_workspace_client
 from config import UC_CONFIG
@@ -25,11 +25,19 @@ router = APIRouter()
 
 
 _ROUTE_LABELS = {
+    "supervisor": "Supervisor agent",
     "genie": "Genie (operational data)",
     "rag": "Knowledge Assistant (contracts)",
 }
 
 _STAGE_MESSAGES = {
+    "supervisor": [
+        (0.0, "Routing to Supervisor agent…"),
+        (0.5, "Supervisor reviewing your question…"),
+        (3.0, "Calling tools (Genie / Knowledge Assistant)…"),
+        (8.0, "Synthesising executive answer…"),
+        (15.0, "Still working — multi-tool reasoning can take a moment…"),
+    ],
     "genie": [
         (0.0, "Routing to Genie…"),
         (0.5, "Generating SQL with Genie…"),
@@ -223,12 +231,12 @@ def chat_endpoint(body: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
             sources=r.get("sources"),
         )
 
-    sup = SupervisorAgent(UC_CONFIG)
-    r = sup.execute(msg)
+    sup = SupervisorEndpointAgent(UC_CONFIG)
+    r = sup.query(msg)
     return ChatResponse(
         answer=str(r.get("answer") or ""),
-        routed_to=r.get("routed_to"),
-        route=r.get("route"),
+        routed_to=r.get("routed_to") or "Supervisor",
+        route="supervisor",
         suggested_followups=followups,
         sql=r.get("sql"),
         sources=r.get("sources"),
@@ -254,7 +262,7 @@ async def chat_stream(body: ChatRequest, background_tasks: BackgroundTasks) -> S
     elif mode == "rag":
         route = "rag"
     else:
-        route = classify_route(msg)
+        route = "supervisor"
 
     async def event_stream():
         yield _sse("start", {"message": msg, "route": route, "label": _ROUTE_LABELS.get(route, route)})
@@ -265,7 +273,9 @@ async def chat_stream(body: ChatRequest, background_tasks: BackgroundTasks) -> S
         def _run() -> dict[str, Any]:
             if route == "genie":
                 return GenieAgent(UC_CONFIG).query(msg)
-            return RAGAgent(UC_CONFIG).query(msg)
+            if route == "rag":
+                return RAGAgent(UC_CONFIG).query(msg)
+            return SupervisorEndpointAgent(UC_CONFIG).query(msg)
 
         worker = loop.run_in_executor(None, _run)
 
