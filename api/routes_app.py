@@ -12,6 +12,7 @@ from databricks.sdk import WorkspaceClient
 from fastapi import APIRouter, BackgroundTasks
 from fastapi.responses import StreamingResponse
 
+import db
 from agents.genie_agent import GenieAgent
 from agents.leader_profile_agent import LeaderProfileAgent
 from agents.rag_agent import RAGAgent
@@ -20,6 +21,8 @@ from api.schemas import BootstrapResponse, ChatRequest, ChatResponse, KPIValue
 from api.workspace_client import get_workspace_client
 from config import UC_CONFIG
 from dbx_sql import fetch_all
+
+DEMO_USER_ID = os.environ.get("DEMO_USER_ID", "adam")
 
 router = APIRouter()
 
@@ -84,6 +87,40 @@ def _run_sql_scalar(client: WorkspaceClient, warehouse_id: str, sql: str) -> Any
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "use_case": UC_CONFIG.use_case_id}
+
+
+@router.get("/conversation/current")
+def current_conversation() -> dict[str, Any]:
+    """Return the latest conversation (id + messages) for the demo user.
+
+    Used by the React app on load to rehydrate the chat from Lakebase.
+    Returns ``{enabled: false}`` when Lakebase env isn't configured.
+    """
+    if not db.is_enabled():
+        return {"enabled": False, "conversation_id": None, "messages": []}
+    try:
+        conv_id = db.latest_conversation_id(DEMO_USER_ID, UC_CONFIG.use_case_id)
+        if not conv_id:
+            return {"enabled": True, "conversation_id": None, "messages": []}
+        return {
+            "enabled": True,
+            "conversation_id": conv_id,
+            "messages": db.load_messages(conv_id, limit=200),
+        }
+    except Exception as exc:
+        return {"enabled": True, "conversation_id": None, "messages": [], "error": str(exc)}
+
+
+@router.post("/conversation/new")
+def start_new_conversation() -> dict[str, Any]:
+    """Create a new empty conversation; subsequent chats append to it."""
+    if not db.is_enabled():
+        return {"enabled": False, "conversation_id": None}
+    try:
+        conv_id = db.create_conversation(DEMO_USER_ID, UC_CONFIG.use_case_id)
+        return {"enabled": True, "conversation_id": conv_id}
+    except Exception as exc:
+        return {"enabled": True, "conversation_id": None, "error": str(exc)}
 
 
 @router.get("/bootstrap", response_model=BootstrapResponse)
@@ -264,13 +301,30 @@ async def chat_stream(body: ChatRequest, background_tasks: BackgroundTasks) -> S
     else:
         route = "supervisor"
 
+    conv_id: str | None = None
+    history: list[dict[str, str]] = [t.model_dump() for t in body.history]
+    if db.is_enabled():
+        try:
+            conv_id = db.get_or_create_active_conversation(DEMO_USER_ID, UC_CONFIG.use_case_id)
+            history = db.recent_history(conv_id, max_turns=12)
+            db.append_message(conv_id, "user", msg)
+        except Exception as exc:
+            conv_id = None
+            print(f"[chat/stream] db.persist user msg failed: {exc}")
+
     async def event_stream():
-        yield _sse("start", {"message": msg, "route": route, "label": _ROUTE_LABELS.get(route, route)})
+        yield _sse(
+            "start",
+            {
+                "message": msg,
+                "route": route,
+                "label": _ROUTE_LABELS.get(route, route),
+                "conversation_id": conv_id,
+            },
+        )
         await asyncio.sleep(0)
 
         loop = asyncio.get_event_loop()
-
-        history = [t.model_dump() for t in body.history]
 
         def _run() -> dict[str, Any]:
             if route == "genie":
@@ -305,15 +359,30 @@ async def chat_stream(body: ChatRequest, background_tasks: BackgroundTasks) -> S
             yield _sse("done", {})
             return
 
+        elapsed_ms = int((time.time() - started_at) * 1000)
+        answer_text = str(result.get("answer") or "")
         payload = {
-            "answer": str(result.get("answer") or ""),
+            "answer": answer_text,
             "routed_to": result.get("agent") or _ROUTE_LABELS.get(route, route),
             "route": route,
             "sql": result.get("sql"),
             "sources": result.get("sources") or [],
             "suggested_followups": followups,
-            "elapsed_ms": int((time.time() - started_at) * 1000),
+            "elapsed_ms": elapsed_ms,
+            "conversation_id": conv_id,
         }
+        if conv_id and answer_text:
+            try:
+                db.append_message(
+                    conv_id,
+                    "assistant",
+                    answer_text,
+                    routed_to=str(payload["routed_to"]) if payload["routed_to"] else None,
+                    sql_text=str(payload["sql"]) if payload["sql"] else None,
+                    elapsed_ms=elapsed_ms,
+                )
+            except Exception as exc:
+                print(f"[chat/stream] db.persist assistant msg failed: {exc}")
         yield _sse("answer", payload)
         yield _sse("done", {})
 

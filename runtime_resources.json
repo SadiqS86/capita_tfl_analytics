@@ -9,5 +9,10 @@
   "uc_knowledge_volume_path": "/Volumes/ss_kibbim_azure_stable/capita_tfl_demo/tfl_contract_kb",
   "supervisor_agent_resource_name": "supervisor-agents/2a55402f-ae0b-4859-8219-dcc75842f6c7",
   "supervisor_agent_id": "2a55402f-ae0b-4859-8219-dcc75842f6c7",
-  "supervisor_endpoint": "mas-2a55402f-endpoint"
+  "supervisor_endpoint": "mas-2a55402f-endpoint",
+  "lakebase_project": "capita-tfl-analytics-pg",
+  "lakebase_branch": "production",
+  "lakebase_endpoint_id": "primary",
+  "lakebase_database": "chat_memory",
+  "lakebase_host": "ep-little-leaf-e1nicyb4.database.eastus2.azuredatabricks.net"
 }

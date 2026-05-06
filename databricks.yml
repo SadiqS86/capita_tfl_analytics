@@ -30,3 +30,13 @@ targets:
                 value: capita_tfl_demo
               - name: DATABRICKS_WAREHOUSE_ID
                 value: c184130100ab98c7
+              - name: LAKEBASE_PROJECT
+                value: capita-tfl-analytics-pg
+              - name: LAKEBASE_BRANCH
+                value: production
+              - name: LAKEBASE_ENDPOINT_ID
+                value: primary
+              - name: LAKEBASE_DATABASE
+                value: chat_memory
+              - name: LAKEBASE_HOST
+                value: ep-little-leaf-e1nicyb4.database.eastus2.azuredatabricks.net

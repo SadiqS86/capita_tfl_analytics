@@ -44,6 +44,31 @@ export async function fetchKpis() {
   return parseJson<KPIPayload[]>(await fetch("/api/kpis"));
 }
 
+export type StoredMessage = {
+  role: "user" | "assistant";
+  content: string;
+  routed_to?: string | null;
+  elapsed_ms?: number | null;
+  created_at?: string;
+};
+
+export async function fetchCurrentConversation() {
+  return parseJson<{
+    enabled: boolean;
+    conversation_id: string | null;
+    messages: StoredMessage[];
+    error?: string;
+  }>(await fetch("/api/conversation/current"));
+}
+
+export async function startNewConversation() {
+  return parseJson<{
+    enabled: boolean;
+    conversation_id: string | null;
+    error?: string;
+  }>(await fetch("/api/conversation/new", { method: "POST" }));
+}
+
 export async function fetchDashboardCharts() {
   return parseJson<{
     compliance_trend: { month: string; compliance: number | null }[];

@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Send, Activity, Lightbulb, X, Moon, Sun, type LucideIcon } from "lucide-react";
+import { Send, Activity, Lightbulb, X, Moon, Sun, RotateCcw, type LucideIcon } from "lucide-react";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts";
 import * as LucideIcons from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   fetchBootstrap,
+  fetchCurrentConversation,
   fetchDashboardCharts,
   fetchKpis,
   fetchSuggestions,
+  startNewConversation,
   streamChat,
   type ChatStreamEvent,
   type KPIPayload,
@@ -240,6 +242,21 @@ export default function App() {
     fetchSuggestions()
       .then((r) => setSuggestions(r.items || []))
       .catch(() => setSuggestions([]));
+
+    // Rehydrate the latest conversation from Lakebase (if enabled server-side)
+    fetchCurrentConversation()
+      .then((c) => {
+        if (!c.enabled || !c.messages || c.messages.length === 0) return;
+        setMessages(
+          c.messages.map((m) => ({
+            role: m.role,
+            content: m.content,
+            routed: m.routed_to || undefined,
+            elapsedMs: m.elapsed_ms ?? undefined,
+          })),
+        );
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -340,6 +357,16 @@ export default function App() {
       .catch(() => {});
   };
 
+  const onNewThread = useCallback(async () => {
+    if (sending) return;
+    try {
+      await startNewConversation();
+    } catch {
+      /* fall through; clearing messages is a fine UX even if API fails */
+    }
+    setMessages([]);
+  }, [sending]);
+
   const chipColor = (i: number) =>
     [CAPITA_COLORS.navyBlue, CAPITA_COLORS.cyan, CAPITA_COLORS.teal, CAPITA_COLORS.purple, CAPITA_COLORS.green][
       i % 5
@@ -402,15 +429,31 @@ export default function App() {
               Chat
             </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setDarkMode(!darkMode)}
-            className={`p-2 rounded-lg transition-colors ${
-              darkMode ? "bg-slate-700 text-yellow-400 hover:bg-slate-600" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-            }`}
-          >
-            {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
-          </button>
+          <div className="flex items-center gap-2">
+            {activeTab === "chat" && (
+              <button
+                type="button"
+                onClick={() => void onNewThread()}
+                disabled={sending}
+                title="Start a new conversation"
+                className={`p-2 rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50 ${
+                  darkMode ? "bg-slate-700 text-slate-200 hover:bg-slate-600" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                }`}
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span className="text-xs font-medium">New thread</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setDarkMode(!darkMode)}
+              className={`p-2 rounded-lg transition-colors ${
+                darkMode ? "bg-slate-700 text-yellow-400 hover:bg-slate-600" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+              }`}
+            >
+              {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            </button>
+          </div>
         </div>
       </div>
 
